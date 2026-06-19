@@ -127,6 +127,19 @@ impl DatabaseManager {
             .unwrap_or_default()
     }
 
+    pub async fn get_user_playlist(
+        &self,
+        user_id: u64,
+        name: &str,
+    ) -> Option<models::UserPlaylist> {
+        let data = self.data.read().await;
+        let key = user_id.to_string();
+        data.user_playlists
+            .get(&key)
+            .and_then(|playlists| playlists.get(name))
+            .cloned()
+    }
+
     pub async fn create_playlist(
         &self,
         user_id: u64,
