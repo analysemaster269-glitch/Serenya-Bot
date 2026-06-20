@@ -1,3 +1,4 @@
+pub mod cleanup;
 pub mod control;
 pub mod info;
 pub mod invite;
@@ -19,6 +20,8 @@ pub fn all_commands() -> Vec<poise::Command<crate::Data, Error>> {
         meta::ping(),
         meta::about(),
         meta::help(),
+        meta::reload(),
+        cleanup::cleanup(),
         playback::play(),
         playback::pause(),
         playback::resume(),

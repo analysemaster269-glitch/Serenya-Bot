@@ -143,15 +143,9 @@ pub async fn songinfo(ctx: Context<'_>) -> Result<(), Error> {
     let mut elapsed = Duration::from_secs(0);
     if let Some(handle) = &player.current_track_handle {
         if let Ok(info) = handle.get_info().await {
-            elapsed = info.position;
+            elapsed = player.seek_offset + info.position;
         }
     }
-
-    let source_str = match track.source_type {
-        crate::core::SourceType::Url => "Direct URL",
-        crate::core::SourceType::Search => "YouTube Search",
-        crate::core::SourceType::Playlist => "User Playlist",
-    };
 
     let loop_str = match player.loop_mode {
         crate::core::loop_mode::LoopMode::Off => "Disabled",
@@ -165,20 +159,33 @@ pub async fn songinfo(ctx: Context<'_>) -> Result<(), Error> {
         .unwrap_or_else(|| "Live".to_string());
     let elapsed_str = crate::discord::embeds::format_duration(elapsed);
 
-    let embed = serenity::CreateEmbed::new()
+    let title_val = if track.url.starts_with("http") {
+        format!("[{}]({})", track.title, track.url)
+    } else {
+        track.title.clone()
+    };
+
+    let lyrics_status = match fetch_lyrics(&ctx.data().http_client, &track.title).await {
+        Ok(Some(_)) => "✅ Available",
+        _ => "❌ Not Available",
+    };
+
+    let source = track.clean_source();
+
+    let mut embed = serenity::CreateEmbed::new()
         .title("ℹ️ Detailed Song Information")
-        .field("Title", &track.title, false)
-        .field("URL", &track.url, false)
-        .field("Requested By", &track.requester_name, true)
-        .field("Source Type", source_str, true)
-        .field("Duration", format!("{elapsed_str} / {duration_str}"), true)
-        .field("Loop State", loop_str, true)
-        .field(
-            "Playback Status",
-            format!("{:?}", player.playback_status),
-            true,
-        )
+        .field("Title", title_val, false)
+        .field("Requested By", format!("👤 **{}**", track.requester_name), true)
+        .field("Duration", format!("⏱️ **{} / {}**", elapsed_str, duration_str), true)
+        .field("Source", format!("💿 **{}**", source), true)
+        .field("Loop State", format!("🔁 **{}**", loop_str), true)
+        .field("Playback Status", format!("🎵 **{:?}**", player.playback_status), true)
+        .field("Lyrics Status", format!("🎤 **{}**", lyrics_status), true)
         .color(0x5865F2);
+
+    if let Some(ref thumb) = track.thumbnail {
+        embed = embed.thumbnail(thumb);
+    }
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())

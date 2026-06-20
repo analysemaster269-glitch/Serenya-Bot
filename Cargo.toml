@@ -24,4 +24,11 @@ rand = "0.9"
 tokio-util = "0.7"
 async-trait = "0.1"
 serde_json = "1"
+symphonia = { version = "0.5.2", features = ["aac", "isomp4", "mp3", "mkv", "ogg", "vorbis", "wav"] }
+moka = { version = "0.12", features = ["future"] }
+rusty_ytdl = "0.7.4"
+uuid = "1"
+
+
+
 
