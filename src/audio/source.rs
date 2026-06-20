@@ -224,39 +224,11 @@ pub async fn prefetch_stream_url_for_guild(
     }
 }
 
-async fn extract_stream_url_inner(track_url: &str) -> Result<String, SerenyaError> {
-    if let Some(stream_url) = cache_get_stream(track_url).await {
-        return Ok(stream_url);
-    }
-
-    let negative_key = crate::audio::runtime::negative_cache_key("stream", track_url);
-    if let Some(entry) = crate::audio::runtime::negative_cache_get(&negative_key).await {
-        tracing::info!(track_url, reason = %entry.reason, "negative cache hit");
-        return Err(SerenyaError::Audio(format!(
-            "Skipping recently failed source: {}",
-            entry.reason
-        )));
-    }
-
-    let youtube_url = is_youtube_url(track_url);
-    // Note: rusty_ytdl is disabled because it currently yields unplayable (HTTP 403 / throttled) stream URLs.
-    // We fall back directly to yt-dlp which is extremely reliable and updated.
-    /*
-    if youtube_url && !crate::audio::runtime::is_youtube_degraded() {
-        tracing::info!(track_url, "Attempting stream resolution via rusty_ytdl");
-        match resolve_via_rusty_ytdl(track_url).await {
-            Ok(stream_url) => {
-                tracing::info!(track_url, "Successfully resolved stream URL via rusty_ytdl");
-                cache_set_stream(track_url.to_owned(), stream_url.clone()).await;
-                return Ok(stream_url);
-            }
-            Err(e) => {
-                tracing::warn!(track_url, err = ?e, "rusty_ytdl resolution failed, falling back to yt-dlp");
-            }
-        }
-    }
-    */
-
+async fn run_ytdlp_stream_resolution(
+    track_url: &str,
+    youtube_url: bool,
+    negative_key: &str,
+) -> Result<String, SerenyaError> {
     let output = crate::audio::runtime::run_ytdlp(
         "stream resolution",
         vec![
@@ -274,36 +246,14 @@ async fn extract_stream_url_inner(track_url: &str) -> Result<String, SerenyaErro
         ],
         crate::audio::runtime::yt_dlp_timeout(),
         youtube_url,
-        Some(negative_key.clone()),
+        Some(negative_key.to_owned()),
     )
-    .await;
-
-    let output = match output {
-        Ok(output) => output,
-        Err(err) => {
-            if youtube_url && !crate::audio::runtime::is_youtube_degraded() {
-                if let Some(video_id) = extract_youtube_video_id(track_url) {
-                    let client = reqwest::Client::new();
-                    if let Some(stream_url) =
-                        resolve_via_invidious_or_piped(video_id, &client).await
-                    {
-                        tracing::info!(
-                            video_id,
-                            "Resolved stream URL via Piped/Invidious fallback"
-                        );
-                        cache_set_stream(track_url.to_owned(), stream_url.clone()).await;
-                        return Ok(stream_url);
-                    }
-                }
-            }
-            return Err(err);
-        }
-    };
+    .await?;
 
     let stream_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if stream_url.is_empty() {
         crate::audio::runtime::remember_negative(
-            negative_key,
+            negative_key.to_owned(),
             "yt-dlp returned an empty stream URL".to_owned(),
         )
         .await;
@@ -312,8 +262,63 @@ async fn extract_stream_url_inner(track_url: &str) -> Result<String, SerenyaErro
         ));
     }
 
-    cache_set_stream(track_url.to_owned(), stream_url.clone()).await;
     Ok(stream_url)
+}
+
+async fn extract_stream_url_inner(track_url: &str) -> Result<String, SerenyaError> {
+    if let Some(stream_url) = cache_get_stream(track_url).await {
+        return Ok(stream_url);
+    }
+
+    let negative_key = crate::audio::runtime::negative_cache_key("stream", track_url);
+    if let Some(entry) = crate::audio::runtime::negative_cache_get(&negative_key).await {
+        tracing::info!(track_url, reason = %entry.reason, "negative cache hit");
+        return Err(SerenyaError::Audio(format!(
+            "Skipping recently failed source: {}",
+            entry.reason
+        )));
+    }
+
+    let youtube_url = is_youtube_url(track_url);
+
+    if youtube_url && !crate::audio::runtime::is_youtube_degraded() {
+        if let Some(video_id) = extract_youtube_video_id(track_url) {
+            let client = reqwest::Client::new();
+            let video_id_str = video_id.to_owned();
+            let track_url_str = track_url.to_owned();
+            let negative_key_str = negative_key.clone();
+
+            tracing::info!(video_id = %video_id_str, "Running parallel stream resolution (Piped/Invidious vs yt-dlp)");
+
+            // Query Piped/Invidious in parallel with yt-dlp
+            let res = tokio::select! {
+                piped_res = resolve_via_invidious_or_piped(&video_id_str, &client) => {
+                    if let Some(url) = piped_res {
+                        tracing::info!(video_id = %video_id_str, "Piped/Invidious resolved stream URL first!");
+                        Ok(url)
+                    } else {
+                        tracing::info!(video_id = %video_id_str, "Piped/Invidious failed, waiting for yt-dlp");
+                        run_ytdlp_stream_resolution(&track_url_str, youtube_url, &negative_key_str).await
+                    }
+                }
+                ytdlp_res = run_ytdlp_stream_resolution(&track_url_str, youtube_url, &negative_key_str) => {
+                    ytdlp_res
+                }
+            };
+
+            if let Ok(ref stream_url) = res {
+                cache_set_stream(track_url.to_owned(), stream_url.clone()).await;
+            }
+            return res;
+        }
+    }
+
+    // Non-YouTube URL or fallback when video_id extraction fails
+    let res = run_ytdlp_stream_resolution(track_url, youtube_url, &negative_key).await;
+    if let Ok(ref stream_url) = res {
+        cache_set_stream(track_url.to_owned(), stream_url.clone()).await;
+    }
+    res
 }
 
 #[allow(dead_code)]
