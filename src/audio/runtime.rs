@@ -125,7 +125,9 @@ pub async fn run_ytdlp(
     negative_cache_key: Option<String>,
 ) -> Result<Output, SerenyaError> {
     tracing::warn!(context, "yt-dlp is temporarily disabled");
-    return Err(SerenyaError::Audio("yt-dlp is temporarily disabled".to_owned()));
+    return Err(SerenyaError::Audio(
+        "yt-dlp is temporarily disabled".to_owned(),
+    ));
 
     if youtube_sensitive && is_youtube_degraded() {
         return Err(youtube_degraded_error());
