@@ -573,27 +573,6 @@ async fn extract_stream_url_inner(track_url: &str) -> Result<String, SerenyaErro
     res
 }
 
-async fn resolve_via_rusty_ytdl(track_url: &str) -> Result<String, SerenyaError> {
-    use rusty_ytdl::{Video, VideoOptions, VideoSearchOptions, choose_format};
-
-    let video = Video::new(track_url)
-        .map_err(|e| SerenyaError::Audio(format!("rusty_ytdl init failed: {e}")))?;
-
-    let video_info = video
-        .get_info()
-        .await
-        .map_err(|e| SerenyaError::Audio(format!("rusty_ytdl get_info failed: {e}")))?;
-
-    let video_options = VideoOptions {
-        filter: VideoSearchOptions::Audio,
-        ..Default::default()
-    };
-
-    let format = choose_format(&video_info.formats, &video_options)
-        .map_err(|e| SerenyaError::Audio(format!("rusty_ytdl choose_format failed: {e}")))?;
-
-    Ok(format.url.clone())
-}
 
 fn is_direct_stream_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
@@ -601,19 +580,22 @@ fn is_direct_stream_url(url: &str) -> bool {
 }
 
 async fn resolve_youtube_stream_native(track_url: &str) -> Option<String> {
-    // 1. Try rusty_ytdl first (direct Google stream)
-    let rusty_future = resolve_via_rusty_ytdl(track_url);
-    if let Ok(Ok(url)) = tokio::time::timeout(Duration::from_secs(4), rusty_future).await {
-        if is_direct_stream_url(&url) {
-            tracing::debug!(track_url, stream_url = %url, "rusty_ytdl resolved direct stream");
-            return Some(url);
+    // 1. Try our custom youtube_resolver (direct Google stream via ANDROID/IOS mobile clients)
+    if let Some(video_id) = extract_youtube_video_id(track_url) {
+        let ctx = youtube_resolver::ResolveContext::default();
+        let resolver_future = youtube_resolver::resolve_best_audio_stream(video_id, &ctx);
+        if let Ok(Ok(url)) = tokio::time::timeout(Duration::from_secs(5), resolver_future).await {
+            if is_direct_stream_url(&url) {
+                tracing::debug!(track_url, stream_url = %url, "youtube_resolver resolved direct stream");
+                return Some(url);
+            }
+            tracing::debug!(url = %url, "rejecting non-direct stream URL from youtube_resolver");
+        } else {
+            tracing::debug!(
+                track_url,
+                "youtube_resolver stream resolution failed or timed out"
+            );
         }
-        tracing::debug!(url = %url, "rejecting non-direct stream URL from rusty_ytdl");
-    } else {
-        tracing::debug!(
-            track_url,
-            "rusty_ytdl stream resolution failed or timed out"
-        );
     }
 
     // 2. Fallback to Invidious/Piped Proxy
