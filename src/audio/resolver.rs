@@ -314,7 +314,9 @@ fn score_provider_candidates(
         *score = (*score + get_priority_boost(&candidate.source, search_query)).clamp(0.0, 1.0);
 
         // Apply a small priority boost for YouTube/YT Music/YT-DLP lyrics videos
-        let is_yt = candidate.source == "YouTube" || candidate.source == "YouTube Music" || candidate.source == "yt-dlp";
+        let is_yt = candidate.source == "YouTube"
+            || candidate.source == "YouTube Music"
+            || candidate.source == "yt-dlp";
         let title_lower = candidate.title.to_lowercase();
         let is_lyric = title_lower.contains("lyric") || title_lower.contains("lyrics");
         if is_yt && is_lyric {
@@ -437,7 +439,11 @@ async fn collect_search_results(
             source_type: SourceType::Search,
             resolved_url: None,
             thumbnail: candidate.thumbnail,
-            source_provider: format!("{} • {:.0}%", candidate.source, if score >= 10.0 { score - 10.0 } else { score } * 100.0),
+            source_provider: format!(
+                "{} • {:.0}%",
+                candidate.source,
+                if score >= 10.0 { score - 10.0 } else { score } * 100.0
+            ),
         })
         .collect();
 
@@ -456,8 +462,6 @@ fn source_priority(source: &str) -> usize {
         _ => 7,
     }
 }
-
-
 
 async fn run_provider_batch(
     providers: &[SearchProviderKind],
@@ -900,7 +904,9 @@ async fn mirror_metadata(
 
     // If the results are poor (e.g. max score < 0.80) and we searched with an artist,
     // the artist name might have confused the search engine. Fall back to searching just the title.
-    if meta.artist.is_some() && (scored.is_empty() || scored.first().map(|(_, s)| *s).unwrap_or(0.0) < 0.80) {
+    if meta.artist.is_some()
+        && (scored.is_empty() || scored.first().map(|(_, s)| *s).unwrap_or(0.0) < 0.80)
+    {
         tracing::info!(
             query = %meta.title,
             "First mirror search yielded poor results. Retrying with only title."
@@ -983,7 +989,11 @@ fn evaluate_confidence_and_respond(
                 source_type: SourceType::Search,
                 resolved_url: None,
                 thumbnail: forced_thumbnail.clone().or(cand.thumbnail),
-                source_provider: format!("{} • {:.0}%", cand.source, if score >= 10.0 { score - 10.0 } else { score } * 100.0),
+                source_provider: format!(
+                    "{} • {:.0}%",
+                    cand.source,
+                    if score >= 10.0 { score - 10.0 } else { score } * 100.0
+                ),
             });
         }
         Ok(ResolvedInput::SearchResults(tracks))
@@ -1069,8 +1079,6 @@ fn extract_spotify_id(url: &str, pattern: &str) -> Option<String> {
     }
     None
 }
-
-
 
 #[derive(serde::Deserialize, Debug)]
 #[allow(dead_code)]
@@ -1385,25 +1393,36 @@ async fn resolve_spotify_playlist_api(
 
         if let Some(errors) = body.get("errors").and_then(|e| e.as_array()) {
             if !errors.is_empty() {
-                let first_err = errors[0].get("message").and_then(|m| m.as_str()).unwrap_or("Unknown GraphQL error");
-                return Err(SerenyaError::Audio(format!("Spotify GraphQL error: {}", first_err)));
+                let first_err = errors[0]
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Unknown GraphQL error");
+                return Err(SerenyaError::Audio(format!(
+                    "Spotify GraphQL error: {}",
+                    first_err
+                )));
             }
         }
 
-        let playlist_v2 = body
-            .pointer("/data/playlistV2")
-            .ok_or_else(|| SerenyaError::Audio("Missing playlistV2 in Spotify GraphQL response".to_owned()))?;
+        let playlist_v2 = body.pointer("/data/playlistV2").ok_or_else(|| {
+            SerenyaError::Audio("Missing playlistV2 in Spotify GraphQL response".to_owned())
+        })?;
 
         if playlist_v2.get("__typename").and_then(|t| t.as_str()) == Some("NotFound") {
-            return Err(SerenyaError::Audio("Spotify playlist not found or access denied".to_owned()));
+            return Err(SerenyaError::Audio(
+                "Spotify playlist not found or access denied".to_owned(),
+            ));
         }
 
-        let content = playlist_v2
-            .get("content")
-            .ok_or_else(|| SerenyaError::Audio("Missing content in Spotify playlistV2".to_owned()))?;
+        let content = playlist_v2.get("content").ok_or_else(|| {
+            SerenyaError::Audio("Missing content in Spotify playlistV2".to_owned())
+        })?;
 
         if total_count.is_none() {
-            let tc = content.get("totalCount").and_then(|t| t.as_u64()).unwrap_or(0);
+            let tc = content
+                .get("totalCount")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0);
             total_count = Some(tc as usize);
             tracing::info!("Spotify playlist total track count: {}", tc);
         }
@@ -1411,7 +1430,9 @@ async fn resolve_spotify_playlist_api(
         let items = content
             .get("items")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| SerenyaError::Audio("Missing items in Spotify playlist content".to_owned()))?;
+            .ok_or_else(|| {
+                SerenyaError::Audio("Missing items in Spotify playlist content".to_owned())
+            })?;
 
         if items.is_empty() {
             tracing::info!("No more items found in Spotify playlist response.");
@@ -1420,7 +1441,8 @@ async fn resolve_spotify_playlist_api(
 
         let items_len = items.len();
         for item in items {
-            let track_val = item.pointer("/itemV2/data")
+            let track_val = item
+                .pointer("/itemV2/data")
                 .or_else(|| item.pointer("/itemV3/data"));
             let Some(track_val) = track_val else {
                 continue;
@@ -1442,13 +1464,19 @@ async fn resolve_spotify_playlist_api(
                 .unwrap_or(0);
 
             let mut artists_vec = Vec::new();
-            if let Some(artists) = track_val.pointer("/artists/items").and_then(|v| v.as_array()) {
+            if let Some(artists) = track_val
+                .pointer("/artists/items")
+                .and_then(|v| v.as_array())
+            {
                 for a in artists {
                     if let Some(a_name) = a.pointer("/profile/name").and_then(|v| v.as_str()) {
                         artists_vec.push(a_name.to_owned());
                     }
                 }
-            } else if let Some(contributors) = track_val.pointer("/identityTrait/contributors/items").and_then(|v| v.as_array()) {
+            } else if let Some(contributors) = track_val
+                .pointer("/identityTrait/contributors/items")
+                .and_then(|v| v.as_array())
+            {
                 for c in contributors {
                     if let Some(c_name) = c.get("name").and_then(|v| v.as_str()) {
                         artists_vec.push(c_name.to_owned());
@@ -1464,7 +1492,9 @@ async fn resolve_spotify_playlist_api(
 
             let thumbnail = track_val
                 .pointer("/albumOfTrack/coverArt/sources")
-                .or_else(|| track_val.pointer("/visualIdentityTrait/squareCoverImage/image/data/sources"))
+                .or_else(|| {
+                    track_val.pointer("/visualIdentityTrait/squareCoverImage/image/data/sources")
+                })
                 .and_then(|v| v.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(|img| img.get("url"))

@@ -61,7 +61,7 @@ impl EventHandler for TrackEndHandler {
                     let mut player = player_lock.write().await;
                     player.consecutive_errors += 1;
                     retry_current = true;
-                    
+
                     if let Some(np) = &mut player.now_playing {
                         crate::audio::source::cache_invalidate_stream(&np.url).await;
                         np.resolved_url = None;
@@ -135,7 +135,7 @@ impl EventHandler for TrackErrorHandler {
                     "Track errored: consecutive errors count: {}",
                     player.consecutive_errors
                 );
-                
+
                 // Invalidate stream cache for the errored track
                 if let Some(np) = &player.now_playing {
                     crate::audio::source::cache_invalidate_stream(&np.url).await;
@@ -377,10 +377,7 @@ pub fn play_next(
             let player = player_lock.read().await;
             player.eight_d_enabled
         };
-        let source = crate::audio::source::create_stream_input(
-            resolved.clone(),
-            eight_d_enabled,
-        )?;
+        let source = crate::audio::source::create_stream_input(resolved.clone(), eight_d_enabled)?;
 
         let handle = {
             let mut call = call_lock.lock().await;

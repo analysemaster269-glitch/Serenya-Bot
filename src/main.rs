@@ -156,7 +156,7 @@ async fn run() -> Result<(), utils::Error> {
                 info!("Slash commands registered globally");
 
                 let guild_players = std::sync::Arc::new(DashMap::new());
-                
+
                 start_empty_room_monitor(guild_players.clone(), ctx.http.clone());
 
                 Ok(Data {
@@ -339,7 +339,9 @@ async fn on_error(error: poise::FrameworkError<'_, Data, utils::Error>) {
 }
 
 fn start_empty_room_monitor(
-    guild_players: Arc<DashMap<serenity::GuildId, Arc<tokio::sync::RwLock<crate::core::GuildPlayer>>>>,
+    guild_players: Arc<
+        DashMap<serenity::GuildId, Arc<tokio::sync::RwLock<crate::core::GuildPlayer>>>,
+    >,
     http: Arc<serenity::Http>,
 ) {
     tokio::spawn(async move {
@@ -356,8 +358,11 @@ fn start_empty_room_monitor(
                 if let Some(player_lock) = guild_players.get(&guild_id) {
                     let player = player_lock.read().await;
                     if let Some(empty_since) = player.empty_since {
-                        if now.duration_since(empty_since).as_secs() >= 10800 { // 3 hours
-                            if !player.queue.is_empty() || player.playback_status != crate::core::PlaybackStatus::Idle {
+                        if now.duration_since(empty_since).as_secs() >= 10800 {
+                            // 3 hours
+                            if !player.queue.is_empty()
+                                || player.playback_status != crate::core::PlaybackStatus::Idle
+                            {
                                 to_clear.push((guild_id, player.announce_channel));
                             }
                         }
@@ -369,10 +374,10 @@ fn start_empty_room_monitor(
                 if let Some(player_lock) = guild_players.get(&guild_id) {
                     let mut player = player_lock.write().await;
                     player.reset();
-                    // Notice we keep empty_since as is (or reset it to Some(now) implicitly? 
-                    // Actually, reset() clears empty_since, so we should set it back to maintain 
+                    // Notice we keep empty_since as is (or reset it to Some(now) implicitly?
+                    // Actually, reset() clears empty_since, so we should set it back to maintain
                     // the empty state, otherwise it might trigger repeatedly or lose state.
-                    // Wait, if we cleared the queue, it's empty, so we don't care if empty_since is reset. 
+                    // Wait, if we cleared the queue, it's empty, so we don't care if empty_since is reset.
                     // It will be re-evaluated next voice update, or we just leave it as Some(now) to prevent re-clearing.
                     player.empty_since = Some(now);
 
@@ -412,7 +417,7 @@ async fn handle_voice_state_update(
 
     let mut player = player_lock.write().await;
 
-    // 2. We track empty_since regardless of playback status, 
+    // 2. We track empty_since regardless of playback status,
     // so we don't return early here anymore.
 
     // 3. Get the bot's current voice channel

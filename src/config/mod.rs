@@ -70,8 +70,6 @@ pub struct PlaybackSection {
     pub max_tracks_per_user_playlist: usize,
 }
 
-
-
 #[derive(Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct ResolverSection {
@@ -130,11 +128,13 @@ pub async fn load_config(path: &str) -> Result<BotConfig, SerenyaError> {
             let default_config = include_str!("../../config.example.yml");
             if let Err(write_err) = tokio::fs::write(path, default_config).await {
                 return Err(SerenyaError::Config(format!(
-                    "config.yml not found, and failed to create default config: {}", write_err
+                    "config.yml not found, and failed to create default config: {}",
+                    write_err
                 )));
             }
             return Err(SerenyaError::Config(format!(
-                "{} not found. A default config has been created. Please fill it out and restart the bot.", path
+                "{} not found. A default config has been created. Please fill it out and restart the bot.",
+                path
             )));
         }
         Err(e) => return Err(SerenyaError::Io(e)),
@@ -379,5 +379,4 @@ mod tests {
             max_tracks_per_user_playlist: 500,
         }
     }
-
 }

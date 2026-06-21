@@ -50,13 +50,20 @@ pub async fn help(
         });
 
         if let Some(c) = cmd {
-            let mut desc = c.description.clone().unwrap_or_else(|| "No description provided.".to_string());
+            let mut desc = c
+                .description
+                .clone()
+                .unwrap_or_else(|| "No description provided.".to_string());
             if !c.aliases.is_empty() {
                 desc.push_str(&format!("\n\n**Aliases:** {}", c.aliases.join(", ")));
             }
 
             if !c.subcommands.is_empty() {
-                let subs: Vec<String> = c.subcommands.iter().map(|s| format!("`{}`", s.name)).collect();
+                let subs: Vec<String> = c
+                    .subcommands
+                    .iter()
+                    .map(|s| format!("`{}`", s.name))
+                    .collect();
                 desc.push_str(&format!("\n**Subcommands:** {}", subs.join(", ")));
             }
 

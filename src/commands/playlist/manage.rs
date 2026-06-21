@@ -81,30 +81,31 @@ pub async fn info(
         .ok_or_else(|| SerenyaError::NotFound(format!("Playlist '{name}' not found.")))?;
 
     if playlist.tracks.is_empty() {
-        ctx.say(format!("Playlist **{}** is currently empty.", name)).await?;
+        ctx.say(format!("Playlist **{}** is currently empty.", name))
+            .await?;
         return Ok(());
     }
 
     ctx.defer().await?;
 
-    let tracks: Vec<crate::core::Track> = playlist.tracks.iter().map(|t| crate::core::Track {
-        title: t.title.clone(),
-        url: t.url.clone(),
-        duration: t.duration_secs.map(Duration::from_secs),
-        requester_id: serenity::UserId::new(user_id),
-        requester_name: ctx.author().name.clone(),
-        source_type: crate::core::track::SourceType::Playlist,
-        resolved_url: None,
-        thumbnail: None,
-        source_provider: "Playlist".to_owned(),
-    }).collect();
+    let tracks: Vec<crate::core::Track> = playlist
+        .tracks
+        .iter()
+        .map(|t| crate::core::Track {
+            title: t.title.clone(),
+            url: t.url.clone(),
+            duration: t.duration_secs.map(Duration::from_secs),
+            requester_id: serenity::UserId::new(user_id),
+            requester_name: ctx.author().name.clone(),
+            source_type: crate::core::track::SourceType::Playlist,
+            resolved_url: None,
+            thumbnail: None,
+            source_provider: "Playlist".to_owned(),
+        })
+        .collect();
 
-    crate::discord::pagination::paginate_queue(
-        ctx,
-        &tracks,
-        &format!("📁 Playlist: {}", name),
-    )
-    .await?;
+    crate::discord::pagination::paginate_queue(ctx, &tracks, &format!("📁 Playlist: {}", name))
+        .await?;
 
     Ok(())
 }

@@ -182,7 +182,7 @@ fn find_unrequested_variant(
     expected_title_lower: &str,
 ) -> Option<&'static VariantRule> {
     VARIANTS.iter().find(|rule| {
-        candidate_title_lower.contains(rule.term) 
+        candidate_title_lower.contains(rule.term)
             && !variant_requested(query_lower, rule.term)
             && !variant_requested(expected_title_lower, rule.term)
     })
@@ -290,7 +290,11 @@ pub fn score_candidates(
         }
 
         if expected_duration.is_some() {
-            if let Some(rule) = find_unrequested_variant(&candidate_title_lower, &query_lower, &expected_title_lower) {
+            if let Some(rule) = find_unrequested_variant(
+                &candidate_title_lower,
+                &query_lower,
+                &expected_title_lower,
+            ) {
                 if rule.hard_reject_with_duration {
                     tracing::info!(
                         "candidate_rejected reason=variant_conflict variant={}",
@@ -309,13 +313,17 @@ pub fn score_candidates(
 
         // 2. Title Match Score
         let clean_cand_title_lower = clean_title(&candidate.title).to_lowercase();
-        let title_similarity = strsim::jaro_winkler(&clean_expected_title_lower, &clean_cand_title_lower)
-            .max(strsim::jaro_winkler(&expected_title_lower, &candidate_title_lower));
+        let title_similarity =
+            strsim::jaro_winkler(&clean_expected_title_lower, &clean_cand_title_lower).max(
+                strsim::jaro_winkler(&expected_title_lower, &candidate_title_lower),
+            );
 
         // 3. Artist Match Score (if expected artist exists)
         let candidate_artist_lower = candidate.artist.to_lowercase();
         let artist_similarity = if let Some(ref art_lower) = expected_artist_lower {
-            if candidate_artist_lower.contains(art_lower.as_str()) || art_lower.contains(candidate_artist_lower.as_str()) {
+            if candidate_artist_lower.contains(art_lower.as_str())
+                || art_lower.contains(candidate_artist_lower.as_str())
+            {
                 1.0
             } else {
                 strsim::jaro_winkler(art_lower.as_str(), &candidate_artist_lower)
@@ -380,13 +388,17 @@ pub fn score_candidates(
         // 8. Variant Boosts
         for rule in VARIANTS {
             let candidate_has_variant = candidate_title_lower.contains(rule.term);
-            let is_requested = variant_requested(&query_lower, rule.term) || variant_requested(&expected_title_lower, rule.term);
+            let is_requested = variant_requested(&query_lower, rule.term)
+                || variant_requested(&expected_title_lower, rule.term);
 
             if is_requested {
                 if candidate_has_variant {
                     score += rule.penalty;
                 } else {
-                    if title_similarity > 0.6 && candidate_artist_lower.len() > 3 && expected_title_lower.contains(&candidate_artist_lower) {
+                    if title_similarity > 0.6
+                        && candidate_artist_lower.len() > 3
+                        && expected_title_lower.contains(&candidate_artist_lower)
+                    {
                         score += rule.penalty;
                     }
                 }
@@ -395,9 +407,9 @@ pub fn score_candidates(
 
         // 9. Unrequested Number/Part Penalty
         // If the candidate contains " 2", "pt. 2", "vol 2" etc. but the query doesn't, heavily penalize it.
-        let has_unrequested_number = [" 2", " 3", " 4", " pt. 2", " pt. 3"].iter().any(|&num| {
-            candidate_title_lower.contains(num) && !expected_title_lower.contains(num)
-        });
+        let has_unrequested_number = [" 2", " 3", " 4", " pt. 2", " pt. 3"]
+            .iter()
+            .any(|&num| candidate_title_lower.contains(num) && !expected_title_lower.contains(num));
         if has_unrequested_number {
             score -= 0.40;
         }
@@ -414,11 +426,14 @@ pub fn score_candidates(
         // 9. Variant Penalties
         for rule in VARIANTS {
             let candidate_has_variant = candidate_title_lower.contains(rule.term);
-            let is_requested = variant_requested(&query_lower, rule.term) || variant_requested(&expected_title_lower, rule.term);
+            let is_requested = variant_requested(&query_lower, rule.term)
+                || variant_requested(&expected_title_lower, rule.term);
 
             if is_requested {
                 if !candidate_has_variant {
-                    let channel_match = title_similarity > 0.6 && candidate_artist_lower.len() > 3 && expected_title_lower.contains(&candidate_artist_lower);
+                    let channel_match = title_similarity > 0.6
+                        && candidate_artist_lower.len() > 3
+                        && expected_title_lower.contains(&candidate_artist_lower);
                     if !channel_match {
                         final_score = (final_score - rule.penalty * 1.5).max(0.0);
                         tracing::debug!(

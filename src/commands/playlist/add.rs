@@ -48,7 +48,8 @@ pub async fn add(
     }
 
     if urls.is_empty() {
-        ctx.say("Please provide at least one search query or URL.").await?;
+        ctx.say("Please provide at least one search query or URL.")
+            .await?;
         return Ok(());
     }
 
@@ -65,7 +66,8 @@ pub async fn add(
     }
 
     if all_tracks.is_empty() {
-        ctx.say("No tracks found for the provided query/queries.").await?;
+        ctx.say("No tracks found for the provided query/queries.")
+            .await?;
         return Ok(());
     }
 

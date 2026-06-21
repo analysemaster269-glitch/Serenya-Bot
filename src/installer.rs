@@ -6,8 +6,10 @@ use tracing::{error, info, warn};
 pub async fn ensure_dependencies() {
     let os = env::consts::OS;
 
-    let ffmpeg_exists = check_command("ffmpeg") || Path::new("ffmpeg.exe").exists() || Path::new("ffmpeg").exists();
-    let ytdlp_exists = check_command("yt-dlp") || Path::new("yt-dlp.exe").exists() || Path::new("yt-dlp").exists();
+    let ffmpeg_exists =
+        check_command("ffmpeg") || Path::new("ffmpeg.exe").exists() || Path::new("ffmpeg").exists();
+    let ytdlp_exists =
+        check_command("yt-dlp") || Path::new("yt-dlp.exe").exists() || Path::new("yt-dlp").exists();
 
     if ffmpeg_exists && ytdlp_exists {
         info!("All dependencies (ffmpeg, yt-dlp) are present.");
@@ -46,7 +48,11 @@ async fn install_ytdlp(os: &str) -> Result<(), Box<dyn std::error::Error>> {
         "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
     };
 
-    let filename = if os == "windows" { "yt-dlp.exe" } else { "yt-dlp" };
+    let filename = if os == "windows" {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    };
 
     let response = reqwest::get(url).await?.bytes().await?;
     tokio::fs::write(filename, &response).await?;
@@ -75,12 +81,12 @@ async fn install_ffmpeg(os: &str) -> Result<(), Box<dyn std::error::Error>> {
             Remove-Item "ffmpeg.zip"
             Remove-Item "ffmpeg_extracted" -Recurse -Force
         "#;
-        
+
         let status = Command::new("powershell")
             .arg("-Command")
             .arg(script)
             .status()?;
-            
+
         if !status.success() {
             return Err("PowerShell script failed".into());
         }
@@ -94,12 +100,9 @@ async fn install_ffmpeg(os: &str) -> Result<(), Box<dyn std::error::Error>> {
             rm ffmpeg.tar.xz
             chmod +x ffmpeg
         "#;
-        
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(script)
-            .status()?;
-            
+
+        let status = Command::new("sh").arg("-c").arg(script).status()?;
+
         if !status.success() {
             return Err("Shell script failed. Consider running: sudo apt install ffmpeg".into());
         }

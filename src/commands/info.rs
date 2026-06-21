@@ -101,10 +101,7 @@ async fn enqueue_selected_track(
             crate::audio::extract_stream_url_for_guild(guild_id.get(), &selected_track.url).await?;
         let eight_d_enabled = player.eight_d_enabled;
         let mut call = call_lock.lock().await;
-        let source = crate::audio::source::create_stream_input(
-            resolved_url,
-            eight_d_enabled,
-        )?;
+        let source = crate::audio::source::create_stream_input(resolved_url, eight_d_enabled)?;
         let handle = call.play_input(source);
 
         let _ = handle.add_event(

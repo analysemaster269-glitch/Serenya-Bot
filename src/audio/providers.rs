@@ -162,8 +162,9 @@ struct SpotifyClientTokenCache {
     expires_at: std::time::Instant,
 }
 
-static SPOTIFY_CLIENT_TOKEN_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<SpotifyClientTokenCache>>> =
-    std::sync::OnceLock::new();
+static SPOTIFY_CLIENT_TOKEN_CACHE: std::sync::OnceLock<
+    tokio::sync::Mutex<Option<SpotifyClientTokenCache>>,
+> = std::sync::OnceLock::new();
 
 pub(crate) struct SpotifyClientTokenInfo {
     pub client_token: String,
@@ -301,7 +302,10 @@ pub(crate) async fn get_spotify_client_token_info(
         http_client
             .get(SPOTIFY_WEB_HOME_URL)
             .header(reqwest::header::USER_AGENT, SPOTIFY_WEB_USER_AGENT)
-            .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header(
+                reqwest::header::ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            )
             .send()
             .await
     })
@@ -335,14 +339,17 @@ pub(crate) async fn get_spotify_client_token_info(
         .await
         .map_err(|e| SerenyaError::Audio(format!("Failed to read Spotify homepage HTML: {e}")))?;
 
-    let client_version = if let Some(start_pos) = html.find("<script id=\"appServerConfig\" type=\"text/plain\">") {
+    let client_version = if let Some(start_pos) =
+        html.find("<script id=\"appServerConfig\" type=\"text/plain\">")
+    {
         let tag_len = "<script id=\"appServerConfig\" type=\"text/plain\">".len();
         let content_start = start_pos + tag_len;
         if let Some(end_pos) = html[content_start..].find("</script>") {
             let base64_str = html[content_start..content_start + end_pos].trim();
             if let Some(decoded_bytes) = base64_decode(base64_str) {
                 if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
-                    if let Ok(config_json) = serde_json::from_str::<serde_json::Value>(&decoded_str) {
+                    if let Ok(config_json) = serde_json::from_str::<serde_json::Value>(&decoded_str)
+                    {
                         config_json
                             .get("clientVersion")
                             .and_then(|v| v.as_str())
@@ -402,15 +409,16 @@ pub(crate) async fn get_spotify_client_token_info(
         )));
     }
 
-    let ct_data: serde_json::Value = ct_response
-        .json()
-        .await
-        .map_err(|e| SerenyaError::Audio(format!("Failed to parse Spotify client token JSON: {e}")))?;
+    let ct_data: serde_json::Value = ct_response.json().await.map_err(|e| {
+        SerenyaError::Audio(format!("Failed to parse Spotify client token JSON: {e}"))
+    })?;
 
     let client_token = ct_data
         .pointer("/granted_token/token")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| SerenyaError::Audio("Spotify client token response missing token".to_owned()))?
+        .ok_or_else(|| {
+            SerenyaError::Audio("Spotify client token response missing token".to_owned())
+        })?
         .to_owned();
 
     crate::logging::register_secret_to_redact(&client_token);
@@ -703,8 +711,9 @@ impl MetadataProvider for SpotifyProvider {
             let Some(title) = item.name else {
                 continue;
             };
-            
-            let artist_str = item.artists
+
+            let artist_str = item
+                .artists
                 .map(|artists| {
                     artists
                         .into_iter()
@@ -714,12 +723,19 @@ impl MetadataProvider for SpotifyProvider {
                 })
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "Unknown Artist".to_owned());
-                
+
             let duration = item.duration_ms.map(Duration::from_millis);
-            let url = item.external_urls.and_then(|u| u.spotify).unwrap_or_default();
-            let thumbnail = item.album
-                .and_then(|a| a.images)
-                .and_then(|mut images| if !images.is_empty() { images.remove(0).url } else { None });
+            let url = item
+                .external_urls
+                .and_then(|u| u.spotify)
+                .unwrap_or_default();
+            let thumbnail = item.album.and_then(|a| a.images).and_then(|mut images| {
+                if !images.is_empty() {
+                    images.remove(0).url
+                } else {
+                    None
+                }
+            });
 
             candidates.push(TrackCandidate {
                 source: "Spotify".to_owned(),
@@ -1251,25 +1267,49 @@ impl YouTubeProvider {
         let val: YtInitialData = serde_json::from_str(json_str)
             .map_err(|e| SerenyaError::Audio(format!("Invalid JSON in ytInitialData: {}", e)))?;
 
-        let contents = val.contents
+        let contents = val
+            .contents
             .and_then(|c| c.two_column_search_results_renderer)
             .and_then(|t| t.primary_contents)
             .and_then(|p| p.section_list_renderer)
             .and_then(|s| s.contents)
-            .and_then(|mut c| if !c.is_empty() { Some(c.remove(0)) } else { None })
+            .and_then(|mut c| {
+                if !c.is_empty() {
+                    Some(c.remove(0))
+                } else {
+                    None
+                }
+            })
             .and_then(|i| i.item_section_renderer)
             .and_then(|i| i.contents)
-            .ok_or_else(|| SerenyaError::Audio("Failed to extract itemSectionRenderer contents".to_owned()))?;
+            .ok_or_else(|| {
+                SerenyaError::Audio("Failed to extract itemSectionRenderer contents".to_owned())
+            })?;
 
         let mut candidates = Vec::new();
         for item in contents {
             if let Some(video) = item.video_renderer {
                 let video_id = video.video_id;
-                let title = video.title.and_then(|t| t.runs).and_then(|mut r| if !r.is_empty() { r.remove(0).text } else { None });
+                let title = video.title.and_then(|t| t.runs).and_then(|mut r| {
+                    if !r.is_empty() {
+                        r.remove(0).text
+                    } else {
+                        None
+                    }
+                });
                 let duration_str = video.length_text.and_then(|t| t.simple_text);
-                let channel = video.owner_text.and_then(|t| t.runs).and_then(|mut r| if !r.is_empty() { r.remove(0).text } else { None });
-                let thumbnail = video.thumbnail.and_then(|t| t.thumbnails).and_then(|mut t| if !t.is_empty() { t.remove(0).url } else { None });
-                
+                let channel = video.owner_text.and_then(|t| t.runs).and_then(|mut r| {
+                    if !r.is_empty() {
+                        r.remove(0).text
+                    } else {
+                        None
+                    }
+                });
+                let thumbnail = video
+                    .thumbnail
+                    .and_then(|t| t.thumbnails)
+                    .and_then(|mut t| if !t.is_empty() { t.remove(0).url } else { None });
+
                 let views_str = video.view_count_text.and_then(|t| t.simple_text);
                 let views = views_str.and_then(|s| {
                     let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -1293,7 +1333,8 @@ impl YouTubeProvider {
                 if let (Some(id), Some(t)) = (video_id, title) {
                     let duration = duration_str.and_then(|s| parse_simple_duration(&s));
                     let channel_name = channel.unwrap_or_else(|| "Unknown Artist".to_owned());
-                    let is_topic = channel_name.ends_with(" - Topic") || channel_name.ends_with("- Topic");
+                    let is_topic =
+                        channel_name.ends_with(" - Topic") || channel_name.ends_with("- Topic");
 
                     candidates.push(TrackCandidate {
                         source: "YouTube".to_owned(),
@@ -1420,8 +1461,8 @@ impl MetadataProvider for YouTubeMusicProvider {
 // SoundCloud Provider (using api-v2.soundcloud.com)
 // ----------------------------------------------------
 use std::sync::LazyLock;
-use tokio::sync::{RwLock, Mutex};
 use std::time::Instant;
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct SoundCloudTrackUser {
@@ -1466,7 +1507,8 @@ struct ClientIdState {
     obtained_at: Instant,
 }
 
-static SOUNDCLOUD_STATE: LazyLock<RwLock<Option<ClientIdState>>> = LazyLock::new(|| RwLock::new(None));
+static SOUNDCLOUD_STATE: LazyLock<RwLock<Option<ClientIdState>>> =
+    LazyLock::new(|| RwLock::new(None));
 static SOUNDCLOUD_REFRESH_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub async fn get_or_fetch_client_id(http_client: &reqwest::Client) -> Result<String, SerenyaError> {
@@ -1498,16 +1540,22 @@ pub async fn get_or_fetch_client_id(http_client: &reqwest::Client) -> Result<Str
             .await
             .map_err(|e| SerenyaError::Audio(format!("Failed to fetch SoundCloud homepage for client_id: {}", e)))?;
 
-        let html = res.text().await
-            .map_err(|e| SerenyaError::Audio(format!("Failed to read SoundCloud homepage body: {}", e)))?;
+        let html = res.text().await.map_err(|e| {
+            SerenyaError::Audio(format!("Failed to read SoundCloud homepage body: {}", e))
+        })?;
 
         let client_id = if let Some(cap) = regex_extract_client_id(&html) {
             cap
         } else {
-            return Err(SerenyaError::Audio("Failed to extract client_id from SoundCloud hydration data".to_owned()));
+            return Err(SerenyaError::Audio(
+                "Failed to extract client_id from SoundCloud hydration data".to_owned(),
+            ));
         };
 
-        tracing::info!("Successfully extracted new SoundCloud client_id: {}", client_id);
+        tracing::info!(
+            "Successfully extracted new SoundCloud client_id: {}",
+            client_id
+        );
         *write_guard = Some(ClientIdState {
             client_id: client_id.clone(),
             obtained_at: Instant::now(),
@@ -1528,7 +1576,11 @@ fn regex_extract_client_id(html: &str) -> Option<String> {
                     if let Some(arr) = parsed.as_array() {
                         for val in arr {
                             if val.get("hydratable").and_then(|h| h.as_str()) == Some("apiClient") {
-                                if let Some(client_id) = val.get("data").and_then(|d| d.get("id")).and_then(|id| id.as_str()) {
+                                if let Some(client_id) = val
+                                    .get("data")
+                                    .and_then(|d| d.get("id"))
+                                    .and_then(|id| id.as_str())
+                                {
                                     return Some(client_id.to_owned());
                                 }
                             }
@@ -1554,26 +1606,34 @@ pub async fn send_soundcloud_request(
         .await
         .map_err(|e| SerenyaError::Audio(format!("SoundCloud request failed: {}", e)))?;
 
-    if res.status() == reqwest::StatusCode::UNAUTHORIZED || res.status() == reqwest::StatusCode::FORBIDDEN {
-        tracing::warn!("SoundCloud request unauthorized (401/403). Clearing client_id and retrying once...");
+    if res.status() == reqwest::StatusCode::UNAUTHORIZED
+        || res.status() == reqwest::StatusCode::FORBIDDEN
+    {
+        tracing::warn!(
+            "SoundCloud request unauthorized (401/403). Clearing client_id and retrying once..."
+        );
         {
             let mut write_guard = SOUNDCLOUD_STATE.write().await;
             *write_guard = None;
         }
-        
+
         client_id = get_or_fetch_client_id(http_client).await?;
         let retry_url = url_factory(&client_id);
-        
+
         let retry_res = http_client.get(&retry_url)
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
             .send()
             .await
             .map_err(|e| SerenyaError::Audio(format!("SoundCloud retry request failed: {}", e)))?;
-            
-        if retry_res.status() == reqwest::StatusCode::UNAUTHORIZED || retry_res.status() == reqwest::StatusCode::FORBIDDEN {
-            return Err(SerenyaError::Audio("SoundCloud request unauthorized even after client_id refresh".to_owned()));
+
+        if retry_res.status() == reqwest::StatusCode::UNAUTHORIZED
+            || retry_res.status() == reqwest::StatusCode::FORBIDDEN
+        {
+            return Err(SerenyaError::Audio(
+                "SoundCloud request unauthorized even after client_id refresh".to_owned(),
+            ));
         }
-        
+
         Ok(retry_res)
     } else {
         Ok(res)
@@ -1595,8 +1655,12 @@ impl MetadataProvider for SoundCloudProvider {
     ) -> Result<Vec<TrackCandidate>, SerenyaError> {
         let query_enc = url_encode(query);
         let res = send_soundcloud_request(http_client, |cid| {
-            format!("https://api-v2.soundcloud.com/search/tracks?q={}&client_id={}&limit=5", query_enc, cid)
-        }).await?;
+            format!(
+                "https://api-v2.soundcloud.com/search/tracks?q={}&client_id={}&limit=5",
+                query_enc, cid
+            )
+        })
+        .await?;
 
         let search_result: SoundCloudSearchResponse = res.json().await.map_err(|e| {
             SerenyaError::Audio(format!("Failed to parse SoundCloud search response: {}", e))
@@ -1604,7 +1668,11 @@ impl MetadataProvider for SoundCloudProvider {
 
         let mut candidates = Vec::new();
         for entry in search_result.collection {
-            let artist = entry.user.as_ref().map(|u| u.username.clone()).unwrap_or_else(|| "SoundCloud Artist".to_owned());
+            let artist = entry
+                .user
+                .as_ref()
+                .map(|u| u.username.clone())
+                .unwrap_or_else(|| "SoundCloud Artist".to_owned());
             candidates.push(TrackCandidate {
                 source: "SoundCloud".to_owned(),
                 title: entry.title.unwrap_or_else(|| "Unknown Title".to_string()),
@@ -1613,7 +1681,9 @@ impl MetadataProvider for SoundCloudProvider {
                 popularity: None,
                 is_official: false,
                 is_topic_channel: false,
-                url: entry.permalink_url.unwrap_or_else(|| format!("https://api.soundcloud.com/tracks/{}", entry.id)),
+                url: entry
+                    .permalink_url
+                    .unwrap_or_else(|| format!("https://api.soundcloud.com/tracks/{}", entry.id)),
                 thumbnail: entry.artwork_url.map(std::sync::Arc::from),
             });
         }
@@ -1634,7 +1704,7 @@ impl SoundCloudProvider {
             if let Ok(res) = http_client.head(url)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
                 .send()
-                .await 
+                .await
             {
                 final_url = res.url().as_str().to_owned();
                 tracing::info!("Redirected shortened SoundCloud URL: {} -> {}", url, final_url);
@@ -1643,23 +1713,36 @@ impl SoundCloudProvider {
 
         let url_enc = url_encode(&final_url);
         let res = send_soundcloud_request(http_client, |cid| {
-            format!("https://api-v2.soundcloud.com/resolve?url={}&client_id={}", url_enc, cid)
-        }).await?;
+            format!(
+                "https://api-v2.soundcloud.com/resolve?url={}&client_id={}",
+                url_enc, cid
+            )
+        })
+        .await?;
 
         if res.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(SerenyaError::Audio("SoundCloud URL not found".to_owned()));
         }
 
         let resolved: serde_json::Value = res.json().await.map_err(|e| {
-            SerenyaError::Audio(format!("Failed to parse SoundCloud resolve response: {}", e))
+            SerenyaError::Audio(format!(
+                "Failed to parse SoundCloud resolve response: {}",
+                e
+            ))
         })?;
 
-        let kind = resolved.get("kind").and_then(|k| k.as_str()).unwrap_or("track");
+        let kind = resolved
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .unwrap_or("track");
 
         if kind == "playlist" || kind == "system-playlist" {
-            let tracks_arr = resolved.get("tracks").and_then(|t| t.as_array()).ok_or_else(|| {
-                SerenyaError::Audio("SoundCloud playlist is missing 'tracks' field".to_owned())
-            })?;
+            let tracks_arr = resolved
+                .get("tracks")
+                .and_then(|t| t.as_array())
+                .ok_or_else(|| {
+                    SerenyaError::Audio("SoundCloud playlist is missing 'tracks' field".to_owned())
+                })?;
 
             let mut track_ids = Vec::new();
             for t in tracks_arr {
@@ -1676,19 +1759,29 @@ impl SoundCloudProvider {
             for chunk in track_ids.chunks(50) {
                 let ids_str: Vec<String> = chunk.iter().map(|id| id.to_string()).collect();
                 let query_ids = ids_str.join(",");
-                
+
                 let bulk_res = send_soundcloud_request(http_client, |cid| {
-                    format!("https://api-v2.soundcloud.com/tracks?ids={}&client_id={}", query_ids, cid)
-                }).await?;
-                
-                let bulk_tracks: Vec<SoundCloudTrackMetadata> = bulk_res.json().await.map_err(|e| {
-                    SerenyaError::Audio(format!("Failed to parse SoundCloud bulk tracks response: {}", e))
-                })?;
-                
+                    format!(
+                        "https://api-v2.soundcloud.com/tracks?ids={}&client_id={}",
+                        query_ids, cid
+                    )
+                })
+                .await?;
+
+                let bulk_tracks: Vec<SoundCloudTrackMetadata> =
+                    bulk_res.json().await.map_err(|e| {
+                        SerenyaError::Audio(format!(
+                            "Failed to parse SoundCloud bulk tracks response: {}",
+                            e
+                        ))
+                    })?;
+
                 for meta in bulk_tracks {
                     let duration = meta.duration.map(|d| Duration::from_millis(d));
-                    let track_url = meta.permalink_url.clone().unwrap_or_else(|| format!("https://api.soundcloud.com/tracks/{}", meta.id));
-                    
+                    let track_url = meta.permalink_url.clone().unwrap_or_else(|| {
+                        format!("https://api.soundcloud.com/tracks/{}", meta.id)
+                    });
+
                     tracks.push(Track {
                         title: meta.title.unwrap_or_else(|| "SoundCloud Track".to_owned()),
                         url: track_url,

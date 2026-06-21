@@ -1,5 +1,5 @@
-use std::str::FromStr;
 use crate::utils::SerenyaError;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Quality {
@@ -59,7 +59,11 @@ impl FromStr for Quality {
     type Err = SerenyaError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let first_word = s.split_whitespace().next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric());
+        let first_word = s
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches(|c: char| !c.is_alphanumeric());
         match first_word.to_lowercase().as_str() {
             "performance" | "perf" => Ok(Quality::Performance),
             "turbo" => Ok(Quality::Turbo),
@@ -86,7 +90,9 @@ pub async fn apply_bitrate(
     use std::str::FromStr;
 
     let premium_tier = {
-        let guild = ctx.guild().ok_or_else(|| SerenyaError::NotFound("Guild not found".into()))?;
+        let guild = ctx
+            .guild()
+            .ok_or_else(|| SerenyaError::NotFound("Guild not found".into()))?;
         guild.premium_tier
     };
 
@@ -115,7 +121,9 @@ pub async fn apply_bitrate(
     if let Some(call_lock) = manager.get(guild_id) {
         let mut call = call_lock.lock().await;
         if quality_mode == Quality::Auto {
-            if let Ok(serenity::Channel::Guild(channel)) = vc_id.to_channel(&ctx.serenity_context().http).await {
+            if let Ok(serenity::Channel::Guild(channel)) =
+                vc_id.to_channel(&ctx.serenity_context().http).await
+            {
                 let ch_bitrate = channel.bitrate.unwrap_or(64_000);
                 call.set_bitrate(songbird::driver::Bitrate::Bits(ch_bitrate as i32));
             }
@@ -125,4 +133,3 @@ pub async fn apply_bitrate(
     }
     Ok(())
 }
-

@@ -371,15 +371,26 @@ pub async fn jump(
 
     let index = if player.now_playing.is_some() {
         if position == 1 {
-            return Err(SerenyaError::Queue("Cannot jump to the currently playing track. Use `/replay` to restart it.".into()).into());
+            return Err(SerenyaError::Queue(
+                "Cannot jump to the currently playing track. Use `/replay` to restart it.".into(),
+            )
+            .into());
         }
         if position > queue_len + 1 {
-            return Err(SerenyaError::Queue(format!("Index {position} out of bounds (queue size is {}).", queue_len + 1)).into());
+            return Err(SerenyaError::Queue(format!(
+                "Index {position} out of bounds (queue size is {}).",
+                queue_len + 1
+            ))
+            .into());
         }
         position - 2
     } else {
         if position > queue_len {
-            return Err(SerenyaError::Queue(format!("Index {position} out of bounds (queue size is {}).", queue_len)).into());
+            return Err(SerenyaError::Queue(format!(
+                "Index {position} out of bounds (queue size is {}).",
+                queue_len
+            ))
+            .into());
         }
         position - 1
     };
@@ -439,7 +450,9 @@ pub async fn r#move(
 
     let (from_idx, to_idx) = if player.now_playing.is_some() {
         if from == 1 || to == 1 {
-            return Err(SerenyaError::Queue("Cannot move the currently playing track.".into()).into());
+            return Err(
+                SerenyaError::Queue("Cannot move the currently playing track.".into()).into(),
+            );
         }
         if from > queue_len + 1 || to > queue_len + 1 {
             return Err(SerenyaError::Queue("Index out of bounds.".into()).into());

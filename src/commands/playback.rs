@@ -366,7 +366,7 @@ pub(crate) async fn enqueue_and_play_resolved(
                             current_track.duration,
                             http_client_clone.clone(),
                         );
-                        
+
                         let announce_channel = player.announce_channel;
                         let track_for_ann = current_track.clone();
                         let db_for_ann = database_clone.clone();
@@ -388,9 +388,9 @@ pub(crate) async fn enqueue_and_play_resolved(
                                     let _ = channel
                                         .send_message(
                                             &ctx_for_ann.http,
-                                            serenity::CreateMessage::new()
-                                                .embed(embed)
-                                                .flags(serenity::MessageFlags::SUPPRESS_NOTIFICATIONS),
+                                            serenity::CreateMessage::new().embed(embed).flags(
+                                                serenity::MessageFlags::SUPPRESS_NOTIFICATIONS,
+                                            ),
                                         )
                                         .await;
                                 }
@@ -410,9 +410,13 @@ pub(crate) async fn enqueue_and_play_resolved(
 
         if show_queue_after_enqueue {
             let queue_tracks = queue_snapshot(&player_lock).await;
-            crate::discord::pagination::paginate_queue(ctx, &queue_tracks, "🎶 Current Queue").await?;
+            crate::discord::pagination::paginate_queue(ctx, &queue_tracks, "🎶 Current Queue")
+                .await?;
         } else if added > 0 {
-            let mut embed = crate::discord::embeds::minimal_track_added_embed(&first_track, &ctx.data().config());
+            let mut embed = crate::discord::embeds::minimal_track_added_embed(
+                &first_track,
+                &ctx.data().config(),
+            );
             embed = embed.footer(serenity::CreateEmbedFooter::new(format!(
                 "Enqueued {} other tracks.",
                 added
@@ -420,7 +424,10 @@ pub(crate) async fn enqueue_and_play_resolved(
             let reply = poise::CreateReply::default().embed(embed);
             ctx.send(reply).await?;
         } else {
-            let embed = crate::discord::embeds::minimal_track_added_embed(&first_track, &ctx.data().config());
+            let embed = crate::discord::embeds::minimal_track_added_embed(
+                &first_track,
+                &ctx.data().config(),
+            );
             let reply = poise::CreateReply::default().embed(embed);
             ctx.send(reply).await?;
         }
@@ -449,11 +456,16 @@ pub(crate) async fn enqueue_and_play_resolved(
             }
             queue_tracks.extend(player.queue.iter().cloned());
             drop(player);
-            crate::discord::pagination::paginate_queue(ctx, &queue_tracks, "🎶 Current Queue").await?;
+            crate::discord::pagination::paginate_queue(ctx, &queue_tracks, "🎶 Current Queue")
+                .await?;
         } else if added == 1 && track_count == 1 {
             let queue_pos = player.queue.len();
             if let Some(track) = player.queue.get(queue_pos - 1) {
-                let embed = crate::discord::embeds::track_added_embed(track, queue_pos, &ctx.data().config());
+                let embed = crate::discord::embeds::track_added_embed(
+                    track,
+                    queue_pos,
+                    &ctx.data().config(),
+                );
                 let reply = poise::CreateReply::default().embed(embed);
                 ctx.send(reply).await?;
             } else {

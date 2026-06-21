@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "rust-1.96-upgrade", "reqwest-0.13" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopus-dev cmake build-essential pkg-config
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting
+        run: cargo fmt --check
+
+      - name: Cargo Check
+        run: cargo check
+
+      - name: Cargo Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Cargo Test
+        run: cargo test
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Cargo Audit
+        run: cargo audit
+
+      - name: Check dependency tree duplicates
+        run: cargo tree -d || true

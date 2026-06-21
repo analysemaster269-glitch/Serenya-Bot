@@ -44,8 +44,6 @@ pub async fn eight_d(
         !player.eight_d_enabled
     };
 
-
-
     let player_lock_clone = player_lock.clone();
     let current_pos_opt = {
         let mut player = player_lock.write().await;
@@ -63,7 +61,10 @@ pub async fn eight_d(
 
     let state = if enabled { "enabled" } else { "disabled" };
     if let Some(current_pos) = current_pos_opt {
-        if let Err(e) = crate::commands::control::seek_by_restart(ctx, guild_id, player_lock_clone, current_pos).await {
+        if let Err(e) =
+            crate::commands::control::seek_by_restart(ctx, guild_id, player_lock_clone, current_pos)
+                .await
+        {
             tracing::error!("Failed to apply 8D effect immediately via restart: {:?}", e);
             ctx.say(format!(
                 "8D audio is now **{state}**, but failed to apply immediately. It will apply from the next track.",
@@ -76,8 +77,7 @@ pub async fn eight_d(
             .await?;
         }
     } else {
-        ctx.say(format!("8D audio is now **{state}**."))
-            .await?;
+        ctx.say(format!("8D audio is now **{state}**.")).await?;
     }
     Ok(())
 }

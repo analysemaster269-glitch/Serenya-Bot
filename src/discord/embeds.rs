@@ -1,6 +1,6 @@
 #![allow(dead_code, clippy::too_many_arguments)]
-use crate::core::Track;
 use crate::config::BotConfig;
+use crate::core::Track;
 use poise::serenity_prelude as serenity;
 use std::time::Duration;
 
@@ -57,7 +57,7 @@ pub fn get_provider_emoji(track: &Track, config: &BotConfig) -> String {
         Some(e) => e,
         None => return default_emoji,
     };
-    
+
     let source = track.clean_source().to_lowercase();
     let emoji_opt = if source.contains("spotify") {
         emojis.spotify.as_deref()
@@ -121,7 +121,10 @@ pub fn now_playing_announce_embed(track: &Track, config: &BotConfig) -> serenity
     serenity::CreateEmbed::new()
         .color(0x5865F2)
         .description(if track.url.starts_with("http") {
-            format!("{} **Now Playing:** [{}]({})", provider_emoji, track.title, track.url)
+            format!(
+                "{} **Now Playing:** [{}]({})",
+                provider_emoji, track.title, track.url
+            )
         } else {
             format!("{} **Now Playing:** **{}**", provider_emoji, track.title)
         })
@@ -133,14 +136,21 @@ pub fn minimal_track_added_embed(track: &Track, config: &BotConfig) -> serenity:
     serenity::CreateEmbed::new()
         .color(0x5865F2)
         .description(if track.url.starts_with("http") {
-            format!("{} **Added to queue:** [{}]({})", provider_emoji, track.title, track.url)
+            format!(
+                "{} **Added to queue:** [{}]({})",
+                provider_emoji, track.title, track.url
+            )
         } else {
             format!("{} **Added to queue:** **{}**", provider_emoji, track.title)
         })
 }
 
 /// Creates a track added to queue embed.
-pub fn track_added_embed(track: &Track, queue_pos: usize, config: &BotConfig) -> serenity::CreateEmbed {
+pub fn track_added_embed(
+    track: &Track,
+    queue_pos: usize,
+    config: &BotConfig,
+) -> serenity::CreateEmbed {
     let duration_str = track
         .duration
         .map(format_duration)

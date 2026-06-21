@@ -1,6 +1,6 @@
-use poise::serenity_prelude as serenity;
-use crate::utils::{Context, Error, SerenyaError};
 use crate::audio::quality::Quality;
+use crate::utils::{Context, Error, SerenyaError};
+use poise::serenity_prelude as serenity;
 
 pub async fn autocomplete_quality(_ctx: Context<'_>, partial: &str) -> Vec<String> {
     let choices = vec![
@@ -72,7 +72,9 @@ pub async fn quality(
 
     // 1. Get guild to check premium boost tier
     let premium_tier = {
-        let guild = ctx.guild().ok_or_else(|| SerenyaError::NotFound("Guild not found".into()))?;
+        let guild = ctx
+            .guild()
+            .ok_or_else(|| SerenyaError::NotFound("Guild not found".into()))?;
         guild.premium_tier
     };
 
@@ -122,25 +124,32 @@ pub async fn quality(
     };
 
     // 5. Update active voice channel bitrate and Songbird encoder
-    let player_lock = ctx
-        .data()
-        .guild_players
-        .get(&guild_id);
+    let player_lock = ctx.data().guild_players.get(&guild_id);
 
     if let Some(player_lock) = player_lock {
         let player = player_lock.read().await;
         if let Some(vc_id) = player.voice_channel {
             // Edit Discord channel bitrate if not Auto
             if quality_mode != Quality::Auto {
-                let _ = vc_id.edit(&ctx.serenity_context().http, serenity::EditChannel::new().bitrate(target_bitrate)).await;
+                let _ = vc_id
+                    .edit(
+                        &ctx.serenity_context().http,
+                        serenity::EditChannel::new().bitrate(target_bitrate),
+                    )
+                    .await;
             }
 
             // Update Songbird encoder bitrate if connected
-            let manager = songbird::get(ctx.serenity_context()).await.ok_or_else(|| SerenyaError::Voice("Songbird manager not initialized".into()))?.clone();
+            let manager = songbird::get(ctx.serenity_context())
+                .await
+                .ok_or_else(|| SerenyaError::Voice("Songbird manager not initialized".into()))?
+                .clone();
             if let Some(call_lock) = manager.get(guild_id) {
                 let mut call = call_lock.lock().await;
                 if quality_mode == Quality::Auto {
-                    if let Ok(serenity::Channel::Guild(channel)) = vc_id.to_channel(&ctx.serenity_context().http).await {
+                    if let Ok(serenity::Channel::Guild(channel)) =
+                        vc_id.to_channel(&ctx.serenity_context().http).await
+                    {
                         let ch_bitrate = channel.bitrate.unwrap_or(64_000);
                         call.set_bitrate(songbird::driver::Bitrate::Bits(ch_bitrate as i32));
                     }
@@ -173,7 +182,9 @@ pub async fn prefix(
     ctx: Context<'_>,
     #[description = "New prefix (optional)"] set: Option<String>,
 ) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or_else(|| SerenyaError::Config("This command can only be used in a server.".into()))?;
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| SerenyaError::Config("This command can only be used in a server.".into()))?;
     let db = &ctx.data().database;
 
     if let Some(new_prefix) = set {
@@ -188,19 +199,26 @@ pub async fn prefix(
         };
 
         if !is_admin && ctx.author().id.get() != ctx.data().config().bot.owner {
-            return Err(SerenyaError::Permission("Only server administrators can change prefix.".into()).into());
+            return Err(SerenyaError::Permission(
+                "Only server administrators can change prefix.".into(),
+            )
+            .into());
         }
 
         let mut settings = db.get_guild_settings(guild_id.get()).await;
         settings.prefix = Some(new_prefix.clone());
         db.update_guild_settings(guild_id.get(), settings).await;
 
-        ctx.say(format!("✅ Prefix has been changed to `{new_prefix}` for this server.")).await?;
+        ctx.say(format!(
+            "✅ Prefix has been changed to `{new_prefix}` for this server."
+        ))
+        .await?;
     } else {
         let settings = db.get_guild_settings(guild_id.get()).await;
-        let current_prefix = settings.prefix.unwrap_or_else(|| ctx.data().config().bot.prefix.clone());
+        let current_prefix = settings
+            .prefix
+            .unwrap_or_else(|| ctx.data().config().bot.prefix.clone());
         ctx.say(format!("`[{current_prefix}]`")).await?;
     }
     Ok(())
 }
-

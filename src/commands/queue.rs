@@ -64,19 +64,29 @@ pub async fn remove(
 
     let index = if player.now_playing.is_some() {
         if position == 1 {
-            ctx.say("❌ Cannot remove the currently playing track. Use `/skip` to skip it.").await?;
+            ctx.say("❌ Cannot remove the currently playing track. Use `/skip` to skip it.")
+                .await?;
             return Ok(());
         }
         let idx = position - 2;
         if idx >= queue_len {
-            ctx.say(format!("❌ Position {} is out of bounds (queue size is {}).", position, queue_len + 1)).await?;
+            ctx.say(format!(
+                "❌ Position {} is out of bounds (queue size is {}).",
+                position,
+                queue_len + 1
+            ))
+            .await?;
             return Ok(());
         }
         idx
     } else {
         let idx = position - 1;
         if idx >= queue_len {
-            ctx.say(format!("❌ Position {} is out of bounds (queue size is {}).", position, queue_len)).await?;
+            ctx.say(format!(
+                "❌ Position {} is out of bounds (queue size is {}).",
+                position, queue_len
+            ))
+            .await?;
             return Ok(());
         }
         idx
