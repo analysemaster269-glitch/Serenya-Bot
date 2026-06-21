@@ -1,6 +1,7 @@
 use crate::core::Track;
 use crate::utils::SerenyaError;
 use moka::future::Cache;
+use serde::Deserialize;
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -97,6 +98,12 @@ fn url_encode(s: &str) -> String {
     encoded
 }
 
+#[derive(Deserialize)]
+struct OEmbedResponse {
+    title: String,
+    thumbnail_url: Option<String>,
+}
+
 pub async fn resolve_youtube_oembed(
     video_url: &str,
     http_client: &reqwest::Client,
@@ -110,20 +117,11 @@ pub async fn resolve_youtube_oembed(
         .send()
         .await
         .map_err(|e| SerenyaError::Audio(format!("failed to fetch YouTube oEmbed: {}", e)))?
-        .json::<serde_json::Value>()
+        .json::<OEmbedResponse>()
         .await
         .map_err(|e| SerenyaError::Audio(format!("failed to parse YouTube oEmbed JSON: {}", e)))?;
 
-    let title = val
-        .get("title")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| SerenyaError::Audio("Missing title in oEmbed response".to_owned()))?;
-    let thumbnail = val
-        .get("thumbnail_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_owned());
-
-    Ok((title.to_owned(), thumbnail))
+    Ok((val.title, val.thumbnail_url))
 }
 
 pub async fn resolve_soundcloud_oembed(
@@ -139,20 +137,11 @@ pub async fn resolve_soundcloud_oembed(
         .send()
         .await
         .map_err(|e| SerenyaError::Audio(format!("failed to fetch SoundCloud oEmbed: {}", e)))?
-        .json::<serde_json::Value>()
+        .json::<OEmbedResponse>()
         .await
         .map_err(|e| SerenyaError::Audio(format!("failed to parse SoundCloud oEmbed JSON: {}", e)))?;
 
-    let title = val
-        .get("title")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| SerenyaError::Audio("Missing title in SoundCloud oEmbed response".to_owned()))?;
-    let thumbnail = val
-        .get("thumbnail_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_owned());
-
-    Ok((title.to_owned(), thumbnail))
+    Ok((val.title, val.thumbnail_url))
 }
 
 fn is_youtube_url(url: &str) -> bool {
@@ -195,18 +184,31 @@ async fn resolve_via_invidious_or_piped(
         }
     }
 
+    #[derive(Deserialize)]
+    struct InvidiousFormat {
+        #[serde(rename = "type")]
+        format_type: Option<String>,
+        url: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct InvidiousResponse {
+        adaptive_formats: Option<Vec<InvidiousFormat>>,
+    }
+
     // 2. Try Invidious API
     let invidious_url = format!("https://yewtu.be/api/v1/videos/{}", video_id);
     if let Ok(Ok(resp)) =
         tokio::time::timeout(Duration::from_secs(4), client.get(&invidious_url).send()).await
     {
-        if let Ok(val) = resp.json::<serde_json::Value>().await {
-            if let Some(adaptive_formats) = val.get("adaptiveFormats").and_then(|a| a.as_array()) {
+        if let Ok(val) = resp.json::<InvidiousResponse>().await {
+            if let Some(adaptive_formats) = val.adaptive_formats {
                 for format in adaptive_formats {
-                    let type_str = format.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    let type_str = format.format_type.unwrap_or_default();
                     if type_str.starts_with("audio/") {
-                        if let Some(url) = format.get("url").and_then(|u| u.as_str()) {
-                            return Some(url.to_owned());
+                        if let Some(url) = format.url {
+                            return Some(url);
                         }
                     }
                 }

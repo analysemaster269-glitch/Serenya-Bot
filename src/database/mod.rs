@@ -17,6 +17,7 @@ use models::{Database, GuildSettings, PlaylistTrack, UserSettings};
 pub struct DatabaseManager {
     data: Arc<RwLock<Database>>,
     path: PathBuf,
+    is_dirty: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DatabaseManager {
@@ -42,15 +43,23 @@ impl DatabaseManager {
         Ok(Self {
             data: Arc::new(RwLock::new(db)),
             path,
+            is_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
     pub async fn save(&self) -> Result<(), SerenyaError> {
-        let yaml = {
+        let db_clone = {
             let data = self.data.read().await;
-            serde_saphyr::to_string(&*data)
-                .map_err(|e| SerenyaError::Database(format!("serialization failed: {e}")))?
+            data.clone()
         };
+
+        let yaml = tokio::task::spawn_blocking(move || {
+            serde_saphyr::to_string(&db_clone)
+                .map_err(|e| SerenyaError::Database(format!("serialization failed: {e}")))
+        })
+        .await
+        .map_err(|e| SerenyaError::Database(format!("spawn_blocking failed: {e}")))?
+        ?;
 
         let tmp_path = self.path.with_extension("yml.tmp");
         let bak_path = self.path.with_extension("yml.bak");
@@ -62,6 +71,7 @@ impl DatabaseManager {
         }
 
         tokio::fs::rename(&tmp_path, &self.path).await?;
+        self.is_dirty.store(false, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -83,8 +93,10 @@ impl DatabaseManager {
                         break;
                     }
                     _ = ticker.tick() => {
-                        if let Err(e) = manager.save().await {
-                            tracing::error!(error = %e, "auto-save failed");
+                        if manager.is_dirty.load(std::sync::atomic::Ordering::SeqCst) {
+                            if let Err(e) = manager.save().await {
+                                tracing::error!(error = %e, "auto-save failed");
+                            }
                         }
                     }
                 }
@@ -108,6 +120,7 @@ impl DatabaseManager {
     pub async fn update_guild_settings(&self, guild_id: u64, settings: GuildSettings) {
         let mut data = self.data.write().await;
         data.guild_settings.insert(guild_id.to_string(), settings);
+        self.is_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub async fn get_user_settings(&self, user_id: u64) -> UserSettings {
@@ -119,6 +132,7 @@ impl DatabaseManager {
     pub async fn update_user_settings(&self, user_id: u64, settings: UserSettings) {
         let mut data = self.data.write().await;
         data.user_settings.insert(user_id.to_string(), settings);
+        self.is_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub async fn get_user_playlist_names(&self, user_id: u64) -> Vec<String> {
@@ -176,6 +190,7 @@ impl DatabaseManager {
                 tracks: Vec::new(),
             },
         );
+        self.is_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
 
         Ok(())
     }
@@ -204,6 +219,7 @@ impl DatabaseManager {
 
         playlist.updated_at = chrono::Utc::now().to_rfc3339();
         playlist.tracks.push(track);
+        self.is_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -221,6 +237,7 @@ impl DatabaseManager {
                 "playlist '{name}' not found"
             )));
         }
+        self.is_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
 
         Ok(())
     }
@@ -248,6 +265,7 @@ impl DatabaseManager {
 
         playlist.tracks.remove(index - 1);
         playlist.updated_at = chrono::Utc::now().to_rfc3339();
+        self.is_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -276,6 +294,7 @@ impl DatabaseManager {
         }
 
         playlists.insert(new_name.to_owned(), playlist);
+        self.is_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -284,5 +303,6 @@ impl DatabaseManager {
         let key = guild_id.to_string();
         let settings = data.guild_settings.entry(key).or_default();
         settings.total_songs_played += 1;
+        self.is_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }

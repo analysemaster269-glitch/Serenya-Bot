@@ -193,11 +193,11 @@ fn duration_tolerance_seconds(expected: Duration, strict: bool) -> f64 {
     }
 }
 
-/// Helper to clean titles from common annotations like [Official Video], (Lyrics), etc.
 pub fn clean_title(title: &str) -> String {
-    let mut cleaned = String::new();
+    let mut cleaned = String::with_capacity(title.len());
     let mut in_bracket: u32 = 0;
     let mut in_paren: u32 = 0;
+    let mut last_was_space = true;
 
     for c in title.chars() {
         match c {
@@ -207,29 +207,42 @@ pub fn clean_title(title: &str) -> String {
             ')' => in_paren = in_paren.saturating_sub(1),
             _ => {
                 if in_bracket == 0 && in_paren == 0 {
-                    cleaned.push(c);
+                    if c.is_whitespace() {
+                        if !last_was_space {
+                            cleaned.push(' ');
+                            last_was_space = true;
+                        }
+                    } else {
+                        cleaned.push(c);
+                        last_was_space = false;
+                    }
                 }
             }
         }
     }
 
-    // Normalize whitespace
-    cleaned.split_whitespace().collect::<Vec<&str>>().join(" ")
+    if cleaned.ends_with(' ') {
+        cleaned.pop();
+    }
+    cleaned
 }
 
-/// Calculate Jaro-Winkler similarity between two strings (0.0 to 1.0)
 pub fn jaro_winkler_similarity(s1: &str, s2: &str) -> f64 {
-    let s1_chars: Vec<char> = s1
-        .chars()
-        .map(|c| c.to_lowercase().next().unwrap_or(c))
-        .collect();
-    let s2_chars: Vec<char> = s2
-        .chars()
-        .map(|c| c.to_lowercase().next().unwrap_or(c))
-        .collect();
+    const MAX_LEN: usize = 128;
 
-    let len1 = s1_chars.len();
-    let len2 = s2_chars.len();
+    let mut s1_chars = ['\0'; MAX_LEN];
+    let mut len1 = 0;
+    for c in s1.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).take(MAX_LEN) {
+        s1_chars[len1] = c;
+        len1 += 1;
+    }
+
+    let mut s2_chars = ['\0'; MAX_LEN];
+    let mut len2 = 0;
+    for c in s2.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).take(MAX_LEN) {
+        s2_chars[len2] = c;
+        len2 += 1;
+    }
 
     if len1 == 0 && len2 == 0 {
         return 1.0;
@@ -240,8 +253,8 @@ pub fn jaro_winkler_similarity(s1: &str, s2: &str) -> f64 {
 
     let match_distance = (len1.max(len2) / 2).saturating_sub(1);
 
-    let mut s1_matches = vec![false; len1];
-    let mut s2_matches = vec![false; len2];
+    let mut s1_matches = [false; MAX_LEN];
+    let mut s2_matches = [false; MAX_LEN];
 
     let mut matches = 0.0;
     let mut transpositions = 0.0;

@@ -144,10 +144,14 @@ async fn run() -> Result<(), utils::Error> {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 info!("Slash commands registered globally");
 
+                let guild_players = std::sync::Arc::new(DashMap::new());
+                
+                start_empty_room_monitor(guild_players.clone(), ctx.http.clone());
+
                 Ok(Data {
                     config: std::sync::RwLock::new(config_clone),
                     database: database_clone,
-                    guild_players: std::sync::Arc::new(DashMap::new()),
+                    guild_players,
                     http_client,
                     start_time,
                 })
@@ -319,6 +323,55 @@ async fn on_error(error: poise::FrameworkError<'_, Data, utils::Error>) {
     }
 }
 
+fn start_empty_room_monitor(
+    guild_players: Arc<DashMap<serenity::GuildId, Arc<tokio::sync::RwLock<crate::core::GuildPlayer>>>>,
+    http: Arc<serenity::Http>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let now = std::time::Instant::now();
+            let mut to_clear = Vec::new();
+
+            for entry in guild_players.iter() {
+                let player = entry.value().read().await;
+                if let Some(empty_since) = player.empty_since {
+                    if now.duration_since(empty_since).as_secs() >= 10800 { // 3 hours
+                        if !player.queue.is_empty() || player.playback_status != crate::core::PlaybackStatus::Idle {
+                            to_clear.push((*entry.key(), player.announce_channel));
+                        }
+                    }
+                }
+            }
+
+            for (guild_id, announce_channel) in to_clear {
+                if let Some(player_lock) = guild_players.get(&guild_id) {
+                    let mut player = player_lock.write().await;
+                    player.reset();
+                    // Notice we keep empty_since as is (or reset it to Some(now) implicitly? 
+                    // Actually, reset() clears empty_since, so we should set it back to maintain 
+                    // the empty state, otherwise it might trigger repeatedly or lose state.
+                    // Wait, if we cleared the queue, it's empty, so we don't care if empty_since is reset. 
+                    // It will be re-evaluated next voice update, or we just leave it as Some(now) to prevent re-clearing.
+                    player.empty_since = Some(now);
+
+                    info!(guild_id = %guild_id, "Cleared queue after 3 hours of empty room");
+
+                    if let Some(channel) = announce_channel {
+                        let embed = serenity::CreateEmbed::new()
+                            .description("Đã 3 tiếng không có ai trong phòng, hàng chờ (queue) đã tự động được dọn dẹp để tiết kiệm tài nguyên.")
+                            .color(0xED4245);
+                        let _ = channel
+                            .send_message(&http, serenity::CreateMessage::new().embed(embed))
+                            .await;
+                    }
+                }
+            }
+        }
+    });
+}
+
 async fn handle_voice_state_update(
     ctx: &serenity::Context,
     _old: &Option<serenity::VoiceState>,
@@ -338,10 +391,8 @@ async fn handle_voice_state_update(
 
     let mut player = player_lock.write().await;
 
-    // 2. Only perform empty-room check if bot is currently Playing
-    if player.playback_status != crate::core::PlaybackStatus::Playing {
-        return Ok(());
-    }
+    // 2. We track empty_since regardless of playback status, 
+    // so we don't return early here anymore.
 
     // 3. Get the bot's current voice channel
     let bot_channel_id = match player.voice_channel {
@@ -372,29 +423,37 @@ async fn handle_voice_state_update(
         }
     }
 
-    // 6. If no humans left, pause playback and announce
+    // 6. Update empty_since and auto-pause if playing
     if human_count == 0 {
-        if let Some(ref handle) = player.current_track_handle {
-            if let Err(e) = handle.pause() {
-                tracing::error!("Failed to auto-pause track in empty channel: {:?}", e);
-            } else {
-                player.playback_status = crate::core::PlaybackStatus::Paused;
-                info!(
-                    guild_id = %guild_id,
-                    channel_id = %bot_channel_id,
-                    "Playback auto-paused because voice channel is empty"
-                );
+        if player.empty_since.is_none() {
+            player.empty_since = Some(std::time::Instant::now());
+        }
 
-                if let Some(announce_channel) = player.announce_channel {
-                    let embed = serenity::CreateEmbed::new()
-                        .description("Không có ai trong room nên âm nhạc sẽ tạm dừng `s.resume` để tiếp tục từ chỗ đã stop")
-                        .color(0x5865F2);
-                    let _ = announce_channel
-                        .send_message(&ctx.http, serenity::CreateMessage::new().embed(embed))
-                        .await;
+        if player.playback_status == crate::core::PlaybackStatus::Playing {
+            if let Some(ref handle) = player.current_track_handle {
+                if let Err(e) = handle.pause() {
+                    tracing::error!("Failed to auto-pause track in empty channel: {:?}", e);
+                } else {
+                    player.playback_status = crate::core::PlaybackStatus::Paused;
+                    info!(
+                        guild_id = %guild_id,
+                        channel_id = %bot_channel_id,
+                        "Playback auto-paused because voice channel is empty"
+                    );
+
+                    if let Some(announce_channel) = player.announce_channel {
+                        let embed = serenity::CreateEmbed::new()
+                            .description("Không có ai trong room nên âm nhạc sẽ tạm dừng `s.resume` để tiếp tục từ chỗ đã stop")
+                            .color(0x5865F2);
+                        let _ = announce_channel
+                            .send_message(&ctx.http, serenity::CreateMessage::new().embed(embed))
+                            .await;
+                    }
                 }
             }
         }
+    } else {
+        player.empty_since = None;
     }
 
     Ok(())

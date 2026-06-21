@@ -67,26 +67,37 @@ fn metadata_provider_boost(source: &str) -> f64 {
     }
 }
 
-fn query_tokens(input: &str) -> Vec<String> {
-    input
+fn token_overlap(query: &str, candidate_text: &str) -> f64 {
+    let mut total_query_tokens = 0;
+    let mut matched_tokens = 0;
+
+    for q_token in query
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|part| part.len() > 1)
-        .map(|part| part.to_lowercase())
-        .collect()
-}
+    {
+        total_query_tokens += 1;
 
-fn token_overlap(query: &str, candidate_text: &str) -> f64 {
-    let query_parts = query_tokens(query);
-    if query_parts.is_empty() {
+        let mut found = false;
+        for c_token in candidate_text
+            .split(|ch: char| !ch.is_alphanumeric())
+            .filter(|part| part.len() > 1)
+        {
+            if q_token.eq_ignore_ascii_case(c_token) {
+                found = true;
+                break;
+            }
+        }
+
+        if found {
+            matched_tokens += 1;
+        }
+    }
+
+    if total_query_tokens == 0 {
         return 0.0;
     }
 
-    let candidate_tokens = query_tokens(candidate_text);
-    let matched = query_parts
-        .iter()
-        .filter(|token| candidate_tokens.iter().any(|candidate| candidate == *token))
-        .count();
-    matched as f64 / query_parts.len() as f64
+    matched_tokens as f64 / total_query_tokens as f64
 }
 
 fn metadata_candidate_score(candidate: &TrackCandidate, query: &str) -> Option<f64> {

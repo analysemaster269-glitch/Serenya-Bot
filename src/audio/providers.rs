@@ -668,54 +668,76 @@ impl MetadataProvider for SpotifyProvider {
         .map_err(|_| SerenyaError::Audio("Spotify search timed out".to_owned()))?
         .map_err(|e| SerenyaError::Audio(format!("Spotify search failed: {e}")))?;
 
-        let val = response
-            .json::<serde_json::Value>()
+        #[derive(serde::Deserialize)]
+        struct SpotifySearchResponse {
+            tracks: Option<SpotifyTracks>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SpotifyTracks {
+            items: Option<Vec<SpotifyTrackItem>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SpotifyTrackItem {
+            name: Option<String>,
+            artists: Option<Vec<SpotifyArtist>>,
+            duration_ms: Option<u64>,
+            external_urls: Option<SpotifyExternalUrls>,
+            album: Option<SpotifyAlbum>,
+            popularity: Option<u64>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SpotifyArtist {
+            name: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SpotifyExternalUrls {
+            spotify: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SpotifyAlbum {
+            images: Option<Vec<SpotifyImage>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SpotifyImage {
+            url: Option<String>,
+        }
+
+        let val: SpotifySearchResponse = response
+            .json()
             .await
             .map_err(|e| SerenyaError::Audio(format!("Spotify search JSON parse failed: {e}")))?;
-        let items = val
-            .pointer("/tracks/items")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
+
+        let items = val.tracks.and_then(|t| t.items).unwrap_or_default();
 
         let mut candidates = Vec::new();
         for item in items {
-            let Some(title) = item.get("name").and_then(|value| value.as_str()) else {
+            let Some(title) = item.name else {
                 continue;
             };
-            let artists = item
-                .get("artists")
-                .and_then(|value| value.as_array())
+            
+            let artist_str = item.artists
                 .map(|artists| {
                     artists
-                        .iter()
-                        .filter_map(|artist| artist.get("name").and_then(|value| value.as_str()))
-                        .collect::<Vec<&str>>()
+                        .into_iter()
+                        .filter_map(|artist| artist.name)
+                        .collect::<Vec<String>>()
                         .join(", ")
                 })
-                .filter(|artists| !artists.is_empty())
+                .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "Unknown Artist".to_owned());
-            let duration = item
-                .get("duration_ms")
-                .and_then(|value| value.as_u64())
-                .map(Duration::from_millis);
-            let url = item
-                .pointer("/external_urls/spotify")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let thumbnail = item
-                .pointer("/album/images/0/url")
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_owned());
-            let popularity = item.get("popularity").and_then(|value| value.as_u64());
+                
+            let duration = item.duration_ms.map(Duration::from_millis);
+            let url = item.external_urls.and_then(|u| u.spotify).unwrap_or_default();
+            let thumbnail = item.album
+                .and_then(|a| a.images)
+                .and_then(|mut images| if !images.is_empty() { images.remove(0).url } else { None });
 
             candidates.push(TrackCandidate {
                 source: "Spotify".to_owned(),
-                title: title.to_owned(),
-                artist: artists,
+                title,
+                artist: artist_str,
                 duration,
-                popularity,
+                popularity: item.popularity,
                 is_official: true,
                 is_topic_channel: false,
                 url,
@@ -1158,34 +1180,108 @@ impl YouTubeProvider {
             .unwrap_or(rest.len());
         let json_str = rest[..end_pos].trim().trim_end_matches(';');
 
-        let val: serde_json::Value = serde_json::from_str(json_str)
+        #[derive(serde::Deserialize)]
+        struct YtInitialData {
+            contents: Option<YtContents>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct YtContents {
+            two_column_search_results_renderer: Option<YtTwoColumn>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct YtTwoColumn {
+            primary_contents: Option<YtPrimaryContents>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct YtPrimaryContents {
+            section_list_renderer: Option<YtSectionList>,
+        }
+        #[derive(serde::Deserialize)]
+        struct YtSectionList {
+            contents: Option<Vec<YtSectionListContent>>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct YtSectionListContent {
+            item_section_renderer: Option<YtItemSection>,
+        }
+        #[derive(serde::Deserialize)]
+        struct YtItemSection {
+            contents: Option<Vec<YtItemSectionContent>>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct YtItemSectionContent {
+            video_renderer: Option<YtVideoRenderer>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct YtVideoRenderer {
+            video_id: Option<String>,
+            title: Option<YtText>,
+            length_text: Option<YtSimpleText>,
+            owner_text: Option<YtText>,
+            thumbnail: Option<YtThumbnails>,
+            view_count_text: Option<YtSimpleText>,
+            owner_badges: Option<Vec<YtBadge>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct YtText {
+            runs: Option<Vec<YtRun>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct YtRun {
+            text: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct YtSimpleText {
+            simple_text: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct YtThumbnails {
+            thumbnails: Option<Vec<YtThumbnail>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct YtThumbnail {
+            url: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct YtBadge {
+            metadata_badge_renderer: Option<YtBadgeRenderer>,
+        }
+        #[derive(serde::Deserialize)]
+        struct YtBadgeRenderer {
+            style: Option<String>,
+        }
+
+        let val: YtInitialData = serde_json::from_str(json_str)
             .map_err(|e| SerenyaError::Audio(format!("Invalid JSON in ytInitialData: {}", e)))?;
 
-        let contents = val.pointer("/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents/0/itemSectionRenderer/contents")
+        let contents = val.contents
+            .and_then(|c| c.two_column_search_results_renderer)
+            .and_then(|t| t.primary_contents)
+            .and_then(|p| p.section_list_renderer)
+            .and_then(|s| s.contents)
+            .and_then(|mut c| if !c.is_empty() { Some(c.remove(0)) } else { None })
+            .and_then(|i| i.item_section_renderer)
+            .and_then(|i| i.contents)
             .ok_or_else(|| SerenyaError::Audio("Failed to extract itemSectionRenderer contents".to_owned()))?;
 
-        let arr = contents.as_array().ok_or_else(|| {
-            SerenyaError::Audio("ItemSectionRenderer contents is not an array".to_owned())
-        })?;
-
         let mut candidates = Vec::new();
-        for item in arr {
-            if let Some(video) = item.get("videoRenderer") {
-                let video_id = video.get("videoId").and_then(|v| v.as_str());
-                let title = video.pointer("/title/runs/0/text").and_then(|v| v.as_str());
-                let duration_str = video
-                    .pointer("/lengthText/simpleText")
-                    .and_then(|v| v.as_str());
-                let channel = video
-                    .pointer("/ownerText/runs/0/text")
-                    .and_then(|v| v.as_str());
-                let thumbnail = video
-                    .pointer("/thumbnail/thumbnails/0/url")
-                    .and_then(|v| v.as_str());
-
-                let views_str = video
-                    .pointer("/viewCountText/simpleText")
-                    .and_then(|v| v.as_str());
+        for item in contents {
+            if let Some(video) = item.video_renderer {
+                let video_id = video.video_id;
+                let title = video.title.and_then(|t| t.runs).and_then(|mut r| if !r.is_empty() { r.remove(0).text } else { None });
+                let duration_str = video.length_text.and_then(|t| t.simple_text);
+                let channel = video.owner_text.and_then(|t| t.runs).and_then(|mut r| if !r.is_empty() { r.remove(0).text } else { None });
+                let thumbnail = video.thumbnail.and_then(|t| t.thumbnails).and_then(|mut t| if !t.is_empty() { t.remove(0).url } else { None });
+                
+                let views_str = video.view_count_text.and_then(|t| t.simple_text);
                 let views = views_str.and_then(|s| {
                     let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
                     digits.parse::<u64>().ok()
@@ -1193,12 +1289,9 @@ impl YouTubeProvider {
 
                 let mut is_verified_artist = false;
                 let mut is_verified = false;
-                if let Some(badges) = video.get("ownerBadges").and_then(|b| b.as_array()) {
+                if let Some(badges) = video.owner_badges {
                     for badge in badges {
-                        if let Some(style) = badge
-                            .pointer("/metadataBadgeRenderer/style")
-                            .and_then(|s| s.as_str())
-                        {
+                        if let Some(style) = badge.metadata_badge_renderer.and_then(|r| r.style) {
                             if style == "BADGE_STYLE_TYPE_VERIFIED_ARTIST" {
                                 is_verified_artist = true;
                             } else if style == "BADGE_STYLE_TYPE_VERIFIED" {
@@ -1209,21 +1302,20 @@ impl YouTubeProvider {
                 }
 
                 if let (Some(id), Some(t)) = (video_id, title) {
-                    let duration = duration_str.and_then(parse_simple_duration);
-                    let channel_name = channel.unwrap_or("Unknown Artist");
-                    let is_topic =
-                        channel_name.ends_with(" - Topic") || channel_name.ends_with("- Topic");
+                    let duration = duration_str.and_then(|s| parse_simple_duration(&s));
+                    let channel_name = channel.unwrap_or_else(|| "Unknown Artist".to_owned());
+                    let is_topic = channel_name.ends_with(" - Topic") || channel_name.ends_with("- Topic");
 
                     candidates.push(TrackCandidate {
                         source: "YouTube".to_owned(),
-                        title: t.to_owned(),
-                        artist: channel_name.to_owned(),
+                        title: t,
+                        artist: channel_name,
                         duration,
                         popularity: views,
                         is_official: is_verified_artist || is_verified,
                         is_topic_channel: is_topic,
                         url: format!("https://www.youtube.com/watch?v={}", id),
-                        thumbnail: thumbnail.map(|s| s.to_owned()),
+                        thumbnail,
                     });
 
                     if candidates.len() >= 7 {

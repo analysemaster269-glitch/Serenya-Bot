@@ -27,6 +27,7 @@ pub struct GuildPlayer {
     pub current_track_handle: Option<TrackHandle>,
     pub skip_votes: HashSet<serenity::UserId>,
     pub requester_absence_timer: Option<Instant>,
+    pub empty_since: Option<Instant>,
     pub seek_offset: std::time::Duration,
     pub is_seeking: bool,
     pub skip_forced: bool,
@@ -47,6 +48,7 @@ impl GuildPlayer {
             current_track_handle: None,
             skip_votes: HashSet::new(),
             requester_absence_timer: None,
+            empty_since: None,
             seek_offset: std::time::Duration::from_secs(0),
             is_seeking: false,
             skip_forced: false,
@@ -70,6 +72,7 @@ impl GuildPlayer {
             let _ = handle.stop();
         }
         self.clear_skip_votes();
+        self.empty_since = None;
         self.seek_offset = std::time::Duration::from_secs(0);
         self.is_seeking = false;
         self.skip_forced = false;

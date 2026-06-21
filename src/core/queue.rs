@@ -37,12 +37,9 @@ impl Queue {
         max_size: usize,
     ) -> Result<usize, SerenyaError> {
         let available = max_size.saturating_sub(self.tracks.len());
-        let to_add = tracks.into_iter().take(available);
-        let mut added = 0;
-        for track in to_add {
-            self.tracks.push_back(track);
-            added += 1;
-        }
+        let to_add: Vec<Track> = tracks.into_iter().take(available).collect();
+        let added = to_add.len();
+        self.tracks.extend(to_add);
         Ok(added)
     }
 
@@ -84,9 +81,7 @@ impl Queue {
 
     pub fn shuffle(&mut self) {
         let mut rng = rand::rng();
-        let mut vec: Vec<Track> = self.tracks.drain(..).collect();
-        vec.shuffle(&mut rng);
-        self.tracks = vec.into();
+        self.tracks.make_contiguous().shuffle(&mut rng);
     }
 
     pub fn clear(&mut self) {
