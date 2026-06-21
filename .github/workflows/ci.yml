@@ -41,11 +41,10 @@ jobs:
       - name: Cargo Test
         run: cargo test
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-
       - name: Cargo Audit
-        run: cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check dependency tree duplicates
         run: cargo tree -d || true

@@ -38,3 +38,9 @@ arc-swap = "1"
 lto = true
 codegen-units = 1
 strip = true
+
+[workspace]
+members = [
+    "crates/rusty-ytdl", "crates/youtube_resolver",
+]
+
