@@ -78,7 +78,24 @@ Serenya comes packed with essential and advanced playback tools:
 Create a `config.yml` based on the `config.example.yml` template.
 Ensure your `DISCORD_TOKEN` environment variable is set or place it directly into the config file.
 
-Spotify imports use an `sp_dc` Web Player session cookie to request a user-scoped Spotify Web API token. Keep the real cookie out of Git.
+#### Getting the Spotify `sp_dc` cookie
+Serenya requires an `sp_dc` cookie to access Spotify's internal Web API (which bypasses rate limits and provides full metadata).
+1. Open Google Chrome or Firefox in Incognito/Private mode.
+2. Go to [Spotify Web Player](https://open.spotify.com/) and log in with a regular or dummy account.
+3. Press `F12` to open Developer Tools.
+4. Go to the **Application** tab (Chrome) or **Storage** tab (Firefox).
+5. Expand **Cookies** on the left menu and select `https://open.spotify.com`.
+6. Find the row with the Name `sp_dc`.
+7. Copy the Value and paste it into `config.yml` under `spotify.sp_dc`. 
+
+**Warning:** Do NOT share this cookie publicly or commit it to GitHub. It acts as an authentication token for your Spotify account.
+
+#### Custom Emojis
+Serenya uses custom emojis in its embed messages (under the `emojis` section in `config.yml`). 
+To ensure the bot displays these emojis properly:
+1. You must manually upload your custom emojis to a Discord server where the bot is a member.
+2. Obtain the emoji format (e.g., `<:spotify:123456789>`) by typing `\:emoji_name:` in the chat.
+3. Paste the formatted string into the `config.yml`. If the bot is not in the server where the emoji was uploaded, it will not be able to render it.
 
 ### Running the Bot
 

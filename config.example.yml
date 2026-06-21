@@ -1,21 +1,20 @@
 bot:
   token: "YOUR_DISCORD_BOT_TOKEN_HERE"
   prefix: "s."
-  owner: 984085171408080897
+  owner: 123456789012345678
   instance_id: "serenya-1"
   display_name: "Serenya"
 
 logging:
   level: debug
-  webhook_enabled: true
+  webhook_enabled: false
   webhook_url: "YOUR_DISCORD_WEBHOOK_URL_HERE"
   webhook_min_level: debug
   webhook_plain_text: true
 
 spotify:
   enabled: true
-  client_id: "YOUR_SPOTIFY_CLIENT_ID_HERE"
-  client_secret: "YOUR_SPOTIFY_CLIENT_SECRET_HERE"
+  sp_dc: "YOUR_SPOTIFY_SP_DC_COOKIE_HERE"
   enable_track: true
   enable_playlist: true
   enable_album: true
@@ -37,7 +36,23 @@ playback:
 resolver:
   max_concurrent_ytdlp: 4
   max_concurrent_resolves_per_guild: 2
-  soundcloud_timeout_ms: 500
+  global_search_timeout_ms: 1800
+  deezer_timeout_ms: 800
+  apple_music_timeout_ms: 800
+  youtube_music_timeout_ms: 1000
+  soundcloud_timeout_ms: 1500
+  spotify_timeout_ms: 800
+  youtube_timeout_ms: 1500
+  ytsearch_timeout_ms: 3000
+  yt_dlp_timeout_seconds: 10
+  prefetch_timeout_seconds: 8
+  prefetch_when_remaining_seconds: 10
+  query_cache_ttl_seconds: 3600
+  metadata_cache_ttl_seconds: 86400
+  stream_cache_ttl_seconds: 3600
+  negative_cache_ttl_seconds: 1800
+  auto_pick_threshold: 0.90
+  perfect_threshold: 0.97
 
 emojis:
   spotify: "<:spotify:123456789>"
