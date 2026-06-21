@@ -1,11 +1,11 @@
 use crate::utils::{Context, Error, SerenyaError};
 
-pub async fn autocomplete_8d(_ctx: Context<'_>, partial: &str) -> Vec<String> {
-    let choices = vec!["on".to_string(), "off".to_string()];
-    choices
-        .into_iter()
-        .filter(|choice| choice.to_lowercase().starts_with(&partial.to_lowercase()))
-        .collect()
+#[derive(Debug, poise::ChoiceParameter, Clone, Copy, PartialEq, Eq)]
+pub enum EightDMode {
+    #[name = "on"]
+    On,
+    #[name = "off"]
+    Off,
 }
 
 /// Toggle the per-guild 8D audio effect.
@@ -18,9 +18,7 @@ pub async fn autocomplete_8d(_ctx: Context<'_>, partial: &str) -> Vec<String> {
 )]
 pub async fn eight_d(
     ctx: Context<'_>,
-    #[autocomplete = "autocomplete_8d"]
-    #[description = "on or off"]
-    mode: Option<String>,
+    #[description = "on or off"] mode: Option<EightDMode>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx
@@ -37,13 +35,9 @@ pub async fn eight_d(
         .clone();
 
     let enabled = if let Some(m) = mode {
-        match m.trim().to_ascii_lowercase().as_str() {
-            "on" => true,
-            "off" => false,
-            _ => {
-                ctx.say("Use `on` or `off`.").await?;
-                return Ok(());
-            }
+        match m {
+            EightDMode::On => true,
+            EightDMode::Off => false,
         }
     } else {
         let player = player_lock.read().await;
