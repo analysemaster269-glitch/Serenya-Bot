@@ -27,11 +27,14 @@ pub async fn stats(ctx: Context<'_>) -> Result<(), Error> {
     let memory_str = get_memory_usage();
     let guilds = ctx.cache().guilds().len();
 
+    let guild_ids: Vec<_> = ctx.data().guild_players.iter().map(|e| *e.key()).collect();
     let mut active_vcs = 0;
-    for entry in ctx.data().guild_players.iter() {
-        let player = entry.value().read().await;
-        if player.voice_channel.is_some() {
-            active_vcs += 1;
+    for gid in guild_ids {
+        if let Some(player_lock) = ctx.data().guild_players.get(&gid) {
+            let player = player_lock.read().await;
+            if player.voice_channel.is_some() {
+                active_vcs += 1;
+            }
         }
     }
 
