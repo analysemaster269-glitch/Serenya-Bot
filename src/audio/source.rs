@@ -92,6 +92,7 @@ pub async fn cache_get_stream(url: &str) -> Option<String> {
 
 pub async fn cache_invalidate_stream(url: &str) {
     STREAM_CACHE.invalidate(url).await;
+    SOUNDCLOUD_STREAM_CACHE.invalidate(url).await;
 }
 
 pub async fn cache_set_stream(url: String, stream_url: String) {
@@ -342,8 +343,8 @@ async fn resolve_soundcloud_stream_url(track_url: &str) -> Result<String, Sereny
     // 5. Query transcoding URL to get direct playable URL
     let stream_url = fetch_stream_url_with_backoff(&transcoding_url).await?;
 
-    // 6. Cache the result for 30 minutes
-    let expires_at = Instant::now() + Duration::from_secs(1800); // 30 minutes
+    // 6. Cache the result for 5 minutes (SoundCloud signed URLs expire quickly)
+    let expires_at = Instant::now() + Duration::from_secs(300); // 5 minutes
     SOUNDCLOUD_STREAM_CACHE.insert(
         track_url.to_owned(),
         SoundCloudStreamInfo {

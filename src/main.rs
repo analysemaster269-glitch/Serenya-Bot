@@ -4,6 +4,7 @@ mod config;
 mod core;
 mod database;
 mod discord;
+mod installer;
 mod logging;
 mod utils;
 
@@ -44,6 +45,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), utils::Error> {
+    installer::ensure_dependencies().await;
     configure_path();
 
     let config = Arc::new(config::load_config("config.yml")?);
