@@ -1526,3 +1526,16 @@ mod tests {
         println!("[PASSED] test_returns_error_when_missing_closing_bracket");
     }
 }
+
+pub(crate) fn get_user_agent_for_url(url: &str) -> &'static str {
+    if url.contains("c=ANDROID") || url.contains("c=android") {
+        "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip"
+    } else if url.contains("c=IOS") || url.contains("c=ios") {
+        "com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)"
+    } else if url.contains("c=TVHTML5") || url.contains("c=tvhtml5") {
+        "Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.225 Safari/537.36"
+    } else {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.101 Safari/537.36"
+    }
+}
+

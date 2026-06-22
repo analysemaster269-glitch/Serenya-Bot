@@ -136,6 +136,8 @@ impl FFmpegStream {
                 }
 
                 let mut headers = DEFAULT_HEADERS.clone();
+                let ua = crate::utils::get_user_agent_for_url(&link);
+                headers.insert(reqwest::header::USER_AGENT, ua.parse().unwrap());
 
                 let range_end = if end == 0 {
                     "".to_string()

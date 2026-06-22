@@ -41,6 +41,9 @@ impl RemoteData {
             );
         }
 
+        let ua = crate::utils::get_user_agent_for_url(self.url().as_str());
+        header_map.insert(header::USER_AGENT, header::HeaderValue::from_str(ua).unwrap());
+
         // Fetch data
         let resp = client
             .get(self.url().clone())

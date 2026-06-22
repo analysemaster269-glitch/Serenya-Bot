@@ -205,6 +205,9 @@ impl Stream for NonLiveStream {
                 .unwrap(),
         );
 
+        let ua = crate::utils::get_user_agent_for_url(&self.link);
+        headers.insert(reqwest::header::USER_AGENT, ua.parse().unwrap());
+
         let mut response = self
             .client
             .get(&self.link)

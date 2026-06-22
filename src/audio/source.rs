@@ -654,7 +654,20 @@ pub fn create_ffmpeg_stream_input(
         || stream_url.contains("youtu.be");
 
     args.push("-user_agent".to_owned());
-    args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36".to_owned());
+    if is_youtube {
+        if stream_url.contains("c=ANDROID") || stream_url.contains("c=android") {
+            args.push("com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip".to_owned());
+        } else if stream_url.contains("c=IOS") || stream_url.contains("c=ios") {
+            args.push(
+                "com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)"
+                    .to_owned(),
+            );
+        } else {
+            args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36".to_owned());
+        }
+    } else {
+        args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36".to_owned());
+    }
 
     if is_youtube {
         args.push("-headers".to_owned());

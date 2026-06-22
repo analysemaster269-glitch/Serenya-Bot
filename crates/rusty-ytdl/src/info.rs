@@ -350,8 +350,10 @@ impl<'opts> Video<'opts> {
 
         // Get content length from source url if content_length is 0
         if content_length == 0 {
+            let ua = crate::utils::get_user_agent_for_url(&link);
             let content_length_response = client
                 .get(&link)
+                .header(reqwest::header::USER_AGENT, ua)
                 .send()
                 .await
                 .map_err(VideoError::ReqwestMiddleware)?
@@ -444,8 +446,10 @@ impl<'opts> Video<'opts> {
 
         // Get content length from source url if content_length is 0
         if content_length == 0 {
+            let ua = crate::utils::get_user_agent_for_url(&link);
             let content_length_response = client
                 .get(&link)
+                .header(reqwest::header::USER_AGENT, ua)
                 .send()
                 .await
                 .map_err(VideoError::ReqwestMiddleware)?

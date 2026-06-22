@@ -217,7 +217,9 @@ impl Stream for LiveStream {
 
         let first_segment = segments.first().unwrap();
 
-        let headers = DEFAULT_HEADERS.clone();
+        let mut headers = DEFAULT_HEADERS.clone();
+        let ua = crate::utils::get_user_agent_for_url(first_segment.0.url().as_str());
+        headers.insert(reqwest::header::USER_AGENT, ua.parse().unwrap());
 
         let mut response = self
             .client
