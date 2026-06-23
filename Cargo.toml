@@ -56,13 +56,12 @@ aho-corasick = "1.1.4"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-strip = true
 panic = "abort"
+strip = true
 
-# Compile third-party dependencies with optimization level 2 even in dev/debug mode
-# to prevent lag and stutters while running Serenya-Bot in debug builds.
+# Optimize dependencies in dev mode for much faster startup and run times (e.g. boa_engine)
 [profile.dev.package."*"]
-opt-level = 2
+opt-level = 3
 
 [workspace]
 members = [

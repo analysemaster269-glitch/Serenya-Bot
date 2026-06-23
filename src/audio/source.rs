@@ -722,7 +722,8 @@ pub async fn create_ffmpeg_stream_input(
         || stream.url.contains("youtu.be");
     let is_soundcloud = stream.client_kind == "SOUNDCLOUD" || stream.url.contains("soundcloud");
 
-    args.push("-user_agent".to_owned());
+    let mut headers = String::new();
+
     if is_youtube {
         let ua = if !stream.user_agent.is_empty() {
             &stream.user_agent
@@ -731,7 +732,7 @@ pub async fn create_ffmpeg_stream_input(
         };
         args.push(ua.to_owned());
     } else {
-        args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36".to_owned());
+        headers.push_str("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36\r\n");
     }
 
     let is_web_youtube_client = stream.client_kind.is_empty()
