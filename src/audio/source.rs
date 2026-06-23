@@ -338,8 +338,7 @@ static SOUNDCLOUD_STREAM_CACHE: LazyLock<ArcSwap<Cache<String, Arc<youtube_resol
     ArcSwap::from_pointee(build_soundcloud_stream_cache())
 });
 
-static SOUNDCLOUD_SEMAPHORE: LazyLock<tokio::sync::Semaphore> =
-    LazyLock::new(|| tokio::sync::Semaphore::new(4));
+
 
 async fn resolve_soundcloud_stream_url(
     track_url: &str,
@@ -350,11 +349,7 @@ async fn resolve_soundcloud_stream_url(
         return Ok((*stream).clone());
     }
 
-    // 2. Concurrency control via Semaphore
-    let _permit = SOUNDCLOUD_SEMAPHORE
-        .acquire()
-        .await
-        .map_err(|_| SerenyaError::Audio("SoundCloud semaphore is closed".to_owned()))?;
+    let _permit = crate::audio::runtime::acquire_soundcloud_resolve().await?;
 
     tracing::info!(track_url, "Resolving SoundCloud stream URL natively...");
 
@@ -642,7 +637,10 @@ async fn resolve_youtube_stream_native(
     if let Some(video_id) = video_id_opt {
         let ctx = youtube_resolver::ResolveContext::default();
         let resolver_future = youtube_resolver::resolve_best_audio_stream(video_id, &ctx);
-        if let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(5), resolver_future).await
+        let timeout_duration = crate::audio::runtime::duration_from_millis(
+            crate::audio::runtime::settings().youtube_timeout_ms,
+        );
+        if let Ok(Ok(stream)) = tokio::time::timeout(timeout_duration, resolver_future).await
         {
             if is_direct_stream_url(&stream.url) {
                 tracing::debug!(track_url, stream_url = %stream.url, "youtube_resolver resolved direct stream");
@@ -787,7 +785,6 @@ pub async fn create_ffmpeg_stream_input(
 
     // Log ffmpeg stderr in background for diagnostics and detect 403 Forbidden
     if let Some(stderr) = child.stderr.take() {
-        let pid = child.id();
         let rt_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             use std::io::BufRead;
@@ -800,7 +797,7 @@ pub async fn create_ffmpeg_stream_input(
 
                 if buf.contains("403 Forbidden") || buf.contains("Server returned 403 Forbidden") {
                     tracing::warn!(
-                        "FFmpeg encountered 403 Forbidden! Invalidating cache and killing process..."
+                        "FFmpeg encountered 403 Forbidden! Invalidating cache and aborting stream..."
                     );
 
                     if let Some(url) = original_url.clone() {
@@ -808,16 +805,6 @@ pub async fn create_ffmpeg_stream_input(
                             cache_invalidate_stream(&url).await;
                         });
                     }
-
-                    // Kill the ffmpeg process cross-platform
-                    #[cfg(target_os = "windows")]
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/F", "/PID", &pid.to_string()])
-                        .spawn();
-                    #[cfg(not(target_os = "windows"))]
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .spawn();
 
                     break;
                 }
