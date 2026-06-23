@@ -1,11 +1,11 @@
 use super::cache::{N_CACHE, get_or_fetch_player_functions, sha1_hash};
 use boa_engine::{Context, Source};
 
-pub fn solve_signature(decipher_js: &str, encrypted_sig: &str) -> Result<String, String> {
+pub async fn solve_signature(decipher_js: &str, encrypted_sig: &str) -> Result<String, String> {
     if decipher_js.is_empty() {
         return Ok(encrypted_sig.to_string());
     }
-    run_js_function(decipher_js, encrypted_sig, "decipher")
+    run_js_function(decipher_js.to_string(), encrypted_sig.to_string(), "decipher".to_string()).await
 }
 
 pub async fn solve_n_throttle(
@@ -27,7 +27,7 @@ pub async fn solve_n_throttle(
         return Ok(n_input.to_string());
     }
 
-    let n_output = run_js_function(&ncode_js, n_input, "ncode")?;
+    let n_output = run_js_function(ncode_js.clone(), n_input.to_string(), "ncode".to_string()).await?;
     N_CACHE.insert(cache_key, n_output.clone()).await;
     Ok(n_output)
 }
@@ -100,7 +100,7 @@ async fn decode_signature_cipher(
         );
     }
 
-    let decrypted_sig = solve_signature(&decipher_js, &s_val)?;
+    let decrypted_sig = solve_signature(&decipher_js, &s_val).await?;
     let mut parsed_url =
         url::Url::parse(&url_val).map_err(|e| format!("Invalid URL in cipher: {e}"))?;
     parsed_url
@@ -109,21 +109,29 @@ async fn decode_signature_cipher(
     Ok(parsed_url.to_string())
 }
 
-fn run_js_function(js_source: &str, input: &str, label: &str) -> Result<String, String> {
-    let mut context = Context::default();
-    context
-        .eval(Source::from_bytes(js_source.as_bytes()))
-        .map_err(|e| format!("JS evaluation error during {label} setup: {e}"))?;
-    let func_name = js_function_name(js_source)
-        .ok_or_else(|| format!("Could not determine {label} function name"))?;
-    let js_call = format!("{func_name}(\"{input}\")");
-    let result = context
-        .eval(Source::from_bytes(js_call.as_bytes()))
-        .map_err(|e| format!("JS execution error during {label} call: {e}"))?;
-    result
-        .as_string()
-        .and_then(|js_str| js_str.to_std_string().ok())
-        .ok_or_else(|| format!("{label} function returned non-string value"))
+async fn run_js_function(js_source: String, input: String, label: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        use std::cell::RefCell;
+        thread_local! {
+            static JS_CTX: RefCell<Context> = RefCell::new(Context::default());
+        }
+        JS_CTX.with(|ctx| {
+            let mut context = ctx.borrow_mut();
+            context
+                .eval(Source::from_bytes(js_source.as_bytes()))
+                .map_err(|e| format!("JS evaluation error during {label} setup: {e}"))?;
+            let func_name = js_function_name(&js_source)
+                .ok_or_else(|| format!("Could not determine {label} function name"))?;
+            let js_call = format!("{func_name}(\"{input}\")");
+            let result = context
+                .eval(Source::from_bytes(js_call.as_bytes()))
+                .map_err(|e| format!("JS execution error during {label} call: {e}"))?;
+            result
+                .as_string()
+                .and_then(|js_str| js_str.to_std_string().ok())
+                .ok_or_else(|| format!("{label} function returned non-string value"))
+        })
+    }).await.map_err(|e| format!("Task join error: {e}"))?
 }
 
 fn js_function_name(js_source: &str) -> Option<&str> {
