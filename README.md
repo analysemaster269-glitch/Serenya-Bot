@@ -1,145 +1,316 @@
 # Serenya Bot
 
-Serenya is a Rust-based, multi-guild Discord music bot designed for high performance, safety, and stability. 
-Built using `serenity` and `poise`, this bot aims to be incredibly robust while delivering features suitable for large, bustling servers.
+Serenya Bot is a Rust-based Discord music bot built for stable playback, low latency, and multi-guild operation. It uses `poise` and `serenity` for Discord commands, `songbird` for voice, FFmpeg for the audio pipeline, and a native Rust YouTube resolver to reduce reliance on Python `yt-dlp` for YouTube playback.
 
-## Features
+## Current Project Status
 
-- **Slash + Prefix Commands**: Support for modern Discord interaction.
-- **High-Fidelity Audio Architecture**: Highly optimized audio streaming bypassing memory bottlenecks, with support for Deezer, Apple Music, Spotify, YouTube, and SoundCloud.
-- **Audio Filters**: 8D audio effect out of the box using FFmpeg.
-- **Graceful Shutdown**: Safe teardown sequence via cancellation tokens to stop background tasks and write final database states to disk.
-- **Atomic Persistence**: Thread-safe atomic file writes with `.tmp` and `.bak` backup strategies to prevent data corruption.
-- **Strict Error Handling**: Custom typed domain errors (`SerenyaError`) propagated safely up to Poise boundaries.
-- **Low Memory Footprint**: Tailored for minimal resource environments (runs easily on a 1GB VPS). **Note**: The **only** bottleneck for speed in the entire Rust codebase is the local execution of `yt-dlp` (which is written in Python) to extract direct media streams, which is network and CPU dependent.
+- Main crate version: `serenya` `1.1.1`.
+- Rust edition: `2024`.
+- Declared Rust toolchain: `rust-version = "1.96.0"`.
+- Workspace members:
+  - `serenya`: the main Discord bot.
+  - `crates/youtube_resolver`: the native Rust YouTube stream resolver.
+  - `crates/rusty-ytdl`: the internal Rust YouTube parsing foundation used by the resolver work.
 
-## Tech Stack
+## Key Features
 
-- **Runtime**: Rust (latest stable), Tokio (async runtime)
-- **Discord Integration**: Poise + Serenity
-- **Voice / Audio**: Songbird (bypassing Symphonia for raw FFmpeg pipelines)
-- **Serialization**: Serde, serde-saphyr (YAML)
-- **Logging**: Tracing
+- Slash commands and prefix commands.
+- Per-guild queue, player state, settings, and playlists.
+- Playback from YouTube, YouTube Music, Spotify, Deezer, Apple Music, SoundCloud, and direct audio URLs.
+- Spotify track, playlist, album, and artist top-track imports.
+- User-owned playlists stored in `database.yml`.
+- Queue controls: skip, previous, jump, move, remove, clear, shuffle, and loop.
+- Playback controls: seek, forward, rewind, and replay.
+- Optional 8D audio effect through FFmpeg.
+- Per-guild audio quality setting.
+- Per-guild now-playing announcements.
+- Metadata cache, stream cache, negative cache, resolver timeouts, and resolver concurrency limits.
+- Graceful shutdown and atomic database writes through `.tmp` and `.bak` files.
+- Typed domain errors through `SerenyaError`, converted to boxed framework errors only at command boundaries when needed.
 
-## Available Commands
+## Native YouTube Resolver
 
-Serenya comes packed with essential and advanced playback tools:
+Serenya includes the internal `youtube_resolver` crate as the native replacement layer for YouTube stream resolution.
 
-### 🎵 Playback & Queue Management
-- `/play [query/url]` - Plays a song or playlist from Spotify, Deezer, Apple Music, YouTube, or SoundCloud.
-- `/search [query]` - Shows a dropdown of top search results from various providers to choose from.
-- `/pause` - Pauses the current track.
-- `/resume` - Resumes a paused track.
-- `/stop` - Stops playback and clears the queue.
-- `/skip` - Skips the currently playing track.
-- `/previous` - Plays the previously played track.
-- `/queue` - Displays the current server queue (paginated).
-- `/jump [position]` - Skips to a specific track in the queue.
-- `/remove [position]` - Removes a specific track from the queue.
-- `/move [from] [to]` - Moves a track from one position to another.
-- `/clear` - Clears all tracks from the queue except the one currently playing.
-- `/shuffle` - Shuffles the upcoming tracks in the queue.
-- `/loop [mode]` - Changes the loop mode (`Off`, `Track`, `Queue`).
-- `/seek [time]` / `/forward [seconds]` / `/rewind [seconds]` - Control the playback position.
-- `/replay` - Replays the current track from the beginning.
-- `/join` / `/leave` - Forces the bot to join or leave the voice channel.
+### What The Resolver Does
 
-### 🎛️ Audio Effects
-- `/8d [on|off]` - Toggles the 8D audio effect.
+- Calls the Innertube player API through anonymous clients.
+- Rotates clients in this order:
+  1. `ANDROID_VR`
+  2. `WEB_SAFARI`
+  3. `IOS`
+  4. `ANDROID`
+  5. `TVHTML5`
+- Keeps audio format selection in `format_selector`.
+- Prefers audio-only, non-DRM WebM Opus before M4A/AAC.
+- Uses `boa_engine` in `js_solver` to handle signature cipher and `n` throttling when required.
+- Uses a SHA-1 hash of `player_url` as the cache-key prefix to avoid collisions between different `base.js` versions.
+- Uses `stream_probe` to range-read a stream before playback and catch HTTP 403 responses or throttled streams early.
+- Returns `ResolvedStream` metadata, including URL, client kind, user agent, MIME type, bitrate, and resolve source so FFmpeg can use stream-specific headers.
 
-### ℹ️ Information & Utilities
-- `/nowplaying` - Displays detailed information about the currently playing track.
-- `/lyrics [query]` - Fetches lyrics for the current song or a specific query.
-- `/songinfo` - Displays raw metadata for the current track.
-- `/ping` - Checks the bot's latency and connection status.
-- `/stats` - Displays global bot statistics (memory, active players, uptime).
-- `/help`, `/about`, `/invite`, `/support` - Useful bot information and links.
-- `/cleanup` - Resets the player state if the bot gets stuck.
+### What The Resolver Does Not Do
 
-### ⚙️ Settings
-- `/announce_track [on|off]` - Toggles "Now Playing" announcements in the channel.
-- `/quality [level]` - Changes the audio resolution quality (Low/Medium/High).
-- `/prefix [new_prefix]` - Changes the bot's prefix for the server.
-- `/reload` - Reloads the bot's configuration (Owner only).
+- It does not use PO tokens.
+- It does not use YouTube cookies.
+- It does not send `serviceIntegrityDimensions`.
+- It does not fall back to Python `yt-dlp` for YouTube stream playback.
 
-## Getting Started
+`yt-dlp` still exists in the project for the installer and for non-YouTube URL fallback. The YouTube playback path intentionally uses the native resolver and direct public stream fallback instead of Python `yt-dlp`.
 
-### Prerequisites
+## Audio Architecture
 
-- Rust 1.85+
-- Visual Studio Build Tools (on Windows) or GCC/Clang (on Linux)
-- CMake
-- `ffmpeg` and `yt-dlp` installed and present in the system `PATH`.
-  - On Windows, you can optionally place the executables in a `bin/` subdirectory in the project root.
-  - On Linux (e.g. VPS Ubuntu), install them globally via package managers (e.g., `apt update && apt install ffmpeg python3 python3-pip -y && pip3 install -U yt-dlp`) and ensure they are accessible.
+```text
+User command
+  -> audio::resolver
+  -> metadata providers and ranking
+  -> Track queue
+  -> audio::source
+  -> youtube_resolver / SoundCloud native / non-YouTube yt-dlp fallback
+  -> FFmpeg input with stream-specific headers
+  -> Songbird voice playback
+```
 
-### Configuration
+Important modules:
 
-Create a `config.yml` based on the `config.example.yml` template.
-Ensure your `DISCORD_TOKEN` environment variable is set or place it directly into the config file.
+- `src/audio/resolver.rs`: handles user input, playlists, URLs, search, and metadata mirroring to playable sources.
+- `src/audio/providers.rs`: metadata providers for Spotify, Deezer, Apple Music, YouTube, SoundCloud, and related flows.
+- `src/audio/source.rs`: stream URL resolution, stream caching, and FFmpeg input creation.
+- `src/audio/runtime.rs`: resolver timeouts, semaphores, negative cache, and degraded mode.
+- `crates/youtube_resolver/src`: native YouTube resolver implementation.
+- `src/core/queue.rs` and `src/core/track.rs`: queue and track models.
+- `src/database`: YAML persistence.
+- `src/commands`: slash and prefix command handlers.
 
-#### Getting the Spotify `sp_dc` cookie
-Serenya requires an `sp_dc` cookie to access Spotify's internal Web API (which bypasses rate limits and provides full metadata).
-1. Open Google Chrome or Firefox in Incognito/Private mode.
-2. Go to [Spotify Web Player](https://open.spotify.com/) and log in with a regular or dummy account.
-3. Press `F12` to open Developer Tools.
-4. Go to the **Application** tab (Chrome) or **Storage** tab (Firefox).
-5. Expand **Cookies** on the left menu and select `https://open.spotify.com`.
-6. Find the row with the Name `sp_dc`.
-7. Copy the Value and paste it into `config.yml` under `spotify.sp_dc`. 
+## Requirements
 
-**Warning:** Do NOT share this cookie publicly or commit it to GitHub. It acts as an authentication token for your Spotify account.
+### Required
 
-#### Custom Emojis
-Serenya uses custom emojis in its embed messages (under the `emojis` section in `config.yml`). 
-To ensure the bot displays these emojis properly:
-1. You must manually upload your custom emojis to a Discord server where the bot is a member.
-2. Obtain the emoji format (e.g., `<:spotify:123456789>`) by typing `\:emoji_name:` in the chat.
-3. Paste the formatted string into the `config.yml`. If the bot is not in the server where the emoji was uploaded, it will not be able to render it.
+- A Rust toolchain compatible with the `rust-version` declared in `Cargo.toml`.
+- Visual Studio Build Tools on Windows, or GCC/Clang on Linux.
+- CMake.
+- FFmpeg in `PATH`, or an FFmpeg binary next to the bot executable.
+- A Discord bot token.
 
-### Running the Bot
+### Recommended
 
-If you downloaded the compiled Release (the `.exe` or Ubuntu binary) from the **Releases** tab:
-1. Put the executable in an empty folder.
-2. Open a terminal/command prompt in that folder and run the executable:
-   - On Windows: `.\serenya.exe`
-   - On Linux (Ubuntu VPS): `./serenya` (Make sure to run `chmod +x serenya` first).
-3. **Auto-Install:** Serenya will automatically download `ffmpeg` and `yt-dlp` into the folder if they are not detected on your system. It will also generate a blank `config.yml` file based on the template. Fill out the `config.yml` and run the bot again!
+- `yt-dlp` in `PATH` if you want fallback support for some non-YouTube URLs.
+- A secondary Spotify account for `sp_dc` if you use Spotify playlist, album, or artist imports.
 
-If you are running from source code:
+## Configuration
+
+Copy the example config:
+
+```powershell
+Copy-Item config.example.yml config.yml
+```
+
+On Linux or macOS:
+
+```bash
+cp config.example.yml config.yml
+```
+
+Main config sections:
+
+- `bot`: token, prefix, owner ID, instance ID, and display name.
+- `logging`: log level and webhook logging.
+- `spotify`: Spotify provider flags, `sp_dc`, market, and import limits.
+- `playback`: queue limits, playlist limits, and announcement settings.
+- `resolver`: timeouts, concurrency limits, cache TTLs, and ranking thresholds.
+- `emojis`: custom embed emojis.
+
+### Tokens And Secrets
+
+`config.yml` contains real secrets and must not be committed. The repository ignores `config.yml`, `database.yml`, `document/`, and `rule.md`.
+
+Do not share:
+
+- Discord bot token.
+- Spotify `sp_dc`.
+- Webhook URL.
+- `database.yml` if it contains real server or user data.
+
+### Getting Spotify `sp_dc`
+
+Spotify imports use the Web Player `sp_dc` cookie to obtain richer metadata.
+
+1. Open Chrome or Firefox in a secondary profile or private window.
+2. Open [Spotify Web Player](https://open.spotify.com/) and sign in.
+3. Open Developer Tools.
+4. Go to the Application or Storage tab.
+5. Select Cookies for `https://open.spotify.com`.
+6. Find the cookie named `sp_dc`.
+7. Copy its value into `spotify.sp_dc` in `config.yml`.
+
+Use a secondary account where possible. This cookie grants access to your Spotify Web session.
+
+## Running From Source
+
+```powershell
+cargo run --release
+```
+
+Build a release binary:
+
+```powershell
+cargo build --release
+```
+
+The Windows binary is generated at:
+
+```text
+target/release/serenya.exe
+```
+
+On Linux:
 
 ```bash
 cargo run --release
 ```
 
-### Verification & Benchmarking
+If FFmpeg or `yt-dlp` is missing from `PATH`, the runtime installer will try to download a matching binary. For production servers, installing dependencies through the system package manager is usually easier to maintain.
 
-To run the test suite:
+## Discord Commands
 
-```bash
+### Playback
+
+| Command | Description |
+| --- | --- |
+| `/play <query>` | Plays a song, URL, personal playlist, Spotify playlist, or Spotify album. |
+| `/pause` | Pauses the current track. |
+| `/resume` | Resumes playback. |
+| `/stop` | Stops playback and clears the queue. |
+| `/skip` | Skips the current track. |
+| `/previous` | Plays the previous track. |
+| `/seek <time>` | Seeks to a specific timestamp. |
+| `/forward <seconds>` | Moves playback forward. |
+| `/rewind <seconds>` | Moves playback backward. |
+| `/replay` | Restarts the current track. |
+| `/join` | Makes the bot join your voice channel. |
+| `/leave` | Makes the bot leave the voice channel. |
+
+### Queue
+
+| Command | Description |
+| --- | --- |
+| `/queue` | Shows the current queue with pagination. |
+| `/jump <position>` | Jumps to a queue position. |
+| `/remove <position>` | Removes a track by queue position. |
+| `/move <from> <to>` | Moves a track inside the queue. |
+| `/clear` | Clears queued tracks. |
+| `/shuffle` | Shuffles upcoming tracks. |
+| `/loop <mode>` | Sets loop mode: off, track, or queue. |
+
+### Search And Info
+
+| Command | Description |
+| --- | --- |
+| `/search <query>` | Searches providers and shows a selectable result menu. |
+| `/nowplaying` | Shows the current track. |
+| `/songinfo` | Shows detailed metadata for the current track. |
+| `/lyrics [query]` | Finds lyrics for the current song or a custom query. |
+
+### Personal Playlists
+
+| Command | Description |
+| --- | --- |
+| `/playlist create <name>` | Creates a personal playlist. |
+| `/playlist add <name> <query>` | Resolves a query or URL and adds it to a playlist. |
+| `/playlist play <name>` | Enqueues the entire playlist. |
+| `/playlist list` | Lists your playlists. |
+| `/playlist remove <name> <position>` | Removes a track from a playlist. |
+| `/playlist rename <old> <new>` | Renames a playlist. |
+| `/playlist delete <name>` | Deletes a playlist. |
+
+### Settings And Utilities
+
+| Command | Description |
+| --- | --- |
+| `/8d <on/off>` | Toggles the 8D effect for the guild. |
+| `/quality <mode>` | Changes audio quality. |
+| `/announce_track <on/off>` | Toggles now-playing announcements. |
+| `/prefix <new_prefix>` | Changes the guild prefix. |
+| `/cleanup` | Resets player state if the bot gets stuck. |
+| `/stats` | Shows runtime statistics. |
+| `/ping` | Checks latency. |
+| `/about` | Shows bot information. |
+| `/help` | Shows command help. |
+| `/invite` | Shows the bot invite link. |
+| `/support` | Shows support information. |
+| `/reload` | Reloads config. Owner only. |
+
+## Testing
+
+Recommended gates before pushing:
+
+```powershell
+cargo fmt --check
+cargo check
+cargo clippy -- -D warnings
 cargo test
+cargo test --workspace
 ```
 
-### Benchmark Results & Resource Usage
+Native YouTube resolver tests:
 
-Serenya has been rigorously benchmarked using a custom Global Allocator Tracker to eliminate memory churn (allocations on the Heap) during intensive track searching and ranking. 
+```powershell
+cargo test --package youtube_resolver --lib -- --nocapture
+```
 
-#### 1. Search Ranking Algorithms (10,000 iterations)
-- **Jaro-Winkler Similarity**: 0 Bytes Allocated (Static Stack arrays) | ~12.20 ms execution time
-- **Token Overlap**: 0 Bytes Allocated (Zero-allocation Iterators) | ~4.05 ms execution time
+Spotify playlist to YouTube mirror to native stream probe integration test:
 
-#### 2. System Resource Consumption (VPS 1 Core / 1GB RAM)
-- **Idle State**: 
-  - RAM: ~15MB - 20MB
-  - CPU: 0%
-- **Playing Music (Normal)**: 
-  - RAM: ~25MB - 30MB
-  - CPU: ~0.5% - 1%
-- **Playing Music (with 8D Audio / Filters enabled)**: 
-  - RAM: ~30MB - 35MB
-  - CPU: ~1% - 3% (Handled natively by FFmpeg stream piping, rust process remains near 0%)
-- **Resolving Audio / Switching Qualities**: 
-  - RAM: Minor spike (~5MB temporary)
-  - CPU: Short spike (~3% - 5%) during `yt-dlp` stream metadata extraction, dropping back to <1% immediately.
+```powershell
+cargo test --package serenya -- audio::resolver::tests::test_spotify_playlist_resolution --nocapture
+```
 
-The bot can serve thousands of concurrent users with effectively zero memory leaks and highly optimized background tasks.
+The Spotify integration test needs stable network access and valid Spotify configuration if the active test path needs a session cookie.
+
+## Troubleshooting
+
+### The Bot Does Not Join Voice Or Play Audio
+
+- Check that the bot has Connect and Speak permissions in the voice channel.
+- Check that FFmpeg is available in `PATH`.
+- Check gateway intents and the bot token.
+- Run `/cleanup` if guild player state is stuck.
+
+### YouTube Streams Fail With 403
+
+- The native resolver probes streams and rotates clients automatically.
+- If a cached stream fails with 403, playback invalidates the cached stream.
+- Do not add PO tokens or YouTube cookies. This project intentionally avoids both approaches.
+
+### Spotify Playlist Import Fails
+
+- Check `spotify.enabled` and `spotify.enable_playlist`.
+- Check that `spotify.sp_dc` is still valid.
+- Lower `spotify.max_playlist_import` for very large playlists.
+- Public Spotify editorial/system playlists may use the embed fallback path.
+
+### Search Is Slow
+
+- Review timeout values in the `resolver` config section.
+- Disable providers you do not need on weak networks or small VPS instances.
+- Check DNS and outbound HTTPS connectivity.
+
+## Development Notes
+
+- Do not commit `config.yml`, `database.yml`, `document/`, or `rule.md`.
+- Do not log secrets.
+- Prefer small modules with clear ownership.
+- Do not block the Tokio runtime.
+- Do not use `unwrap`, `expect`, or `panic` in production paths.
+- Use Conventional Commits, for example `feat(youtube): add stream probe`.
+
+## Thanks And References
+
+Serenya builds on ideas and libraries from the Rust, Discord, and audio communities:
+
+- Thanks to the child/fork repository [Herzchens/rusty_ytdl](https://github.com/Herzchens/rusty_ytdl). The workspace crate `crates/rusty-ytdl` is an important foundation for YouTube parsing and Rust-side resolver work.
+- Thanks to [yt-dlp](https://github.com/yt-dlp/yt-dlp) for public research into YouTube extraction, signature deciphering, and edge cases.
+- Thanks to `serenity`, `poise`, `songbird`, `tokio`, `reqwest`, `boa_engine`, `moka`, `tracing`, and the Rust community.
+- Thanks to the public provider documentation and behavior that helped validate metadata flows for Spotify, Deezer, Apple Music, SoundCloud, YouTube, and YouTube Music.
+
+## License
+
+See [LICENSE](LICENSE).

@@ -2253,7 +2253,7 @@ mod tests {
             );
 
             let probe =
-                youtube_resolver::probe_resolved_stream_health(&stream, 32 * 1024, 10.0).await?;
+                youtube_resolver::probe_resolved_stream_health(&http_client, &stream, 32 * 1024, 10.0).await?;
 
             println!(
                 "spotify playlist probe: title={}, client={}, source={}, bytes={}, speed={:.2} KB/s",

@@ -4,18 +4,15 @@ use crate::{
     format_selector, get_or_fetch_session, js_solver, resolve_best_audio_stream_rusty_ytdl,
     stream_probe,
 };
-use std::time::Duration;
 
 pub async fn probe_resolved_stream_health(
+    http_client: &reqwest::Client,
     stream: &ResolvedStream,
     bytes_to_probe: usize,
     min_speed_kbps: f64,
 ) -> Result<stream_probe::ProbeResult, stream_probe::ProbeError> {
-    let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()?;
     stream_probe::probe_stream_health(
-        &http_client,
+        http_client,
         &stream.url,
         &stream.user_agent,
         &stream.client_kind,
@@ -29,9 +26,7 @@ pub async fn resolve_best_audio_stream_via_api(
     video_id: &str,
     context: &ResolveContext,
 ) -> Result<ResolvedStream, ResolveError> {
-    let http_client = reqwest::Client::builder()
-        .timeout(context.timeout)
-        .build()?;
+    let http_client = &context.http_client;
     let player_url = get_or_fetch_session(&http_client).await?.player_url;
     let clients = vec![
         create_android_vr_client(),

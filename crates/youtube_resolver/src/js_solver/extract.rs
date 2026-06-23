@@ -97,14 +97,27 @@ fn cut_after_js(str: &str) -> Option<&str> {
         return None;
     }
     let mut open_braces = 0;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut is_escaped = false;
+
     for (i, c) in str.char_indices() {
-        if c == '{' {
-            open_braces += 1;
-        } else if c == '}' {
-            open_braces -= 1;
-            if open_braces == 0 {
-                return Some(&str[..=i]);
+        if is_escaped {
+            is_escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => is_escaped = true,
+            '\'' if !in_double_quote => in_single_quote = !in_single_quote,
+            '"' if !in_single_quote => in_double_quote = !in_double_quote,
+            '{' if !in_single_quote && !in_double_quote => open_braces += 1,
+            '}' if !in_single_quote && !in_double_quote => {
+                open_braces -= 1;
+                if open_braces == 0 {
+                    return Some(&str[..=i]);
+                }
             }
+            _ => {}
         }
     }
     None
