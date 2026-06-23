@@ -6,7 +6,6 @@ use reqwest::{
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use scraper::{Html, Selector};
-use serde_json::json;
 use std::{
     borrow::{Borrow, Cow},
     path::Path,
@@ -202,7 +201,6 @@ impl<'opts> Video<'opts> {
                         .get("android_sdkless")
                         .cloned()
                         .unwrap_or_default(),
-                    self.options.request_options.po_token.as_ref(),
                 )
                 .await?;
 
@@ -220,7 +218,6 @@ impl<'opts> Video<'opts> {
                         .get("tv_embedded")
                         .cloned()
                         .unwrap_or_default(),
-                    self.options.request_options.po_token.as_ref(),
                 )
                 .await?;
 
@@ -536,7 +533,6 @@ impl<'opts> Video<'opts> {
         &self,
         html: &str,
         configs: (&str, &str, &str),
-        po_token: Option<&String>,
     ) -> Result<String, VideoError> {
         use std::str::FromStr;
 
@@ -548,7 +544,7 @@ impl<'opts> Video<'opts> {
 
         let visitor_data = get_visitor_data(&html)?;
 
-        let mut query = serde_json::from_str::<serde_json::Value>(&format!(
+        let query = serde_json::from_str::<serde_json::Value>(&format!(
             r#"{{
             {client}
             "playbackContext": {{
@@ -561,16 +557,6 @@ impl<'opts> Video<'opts> {
         }}"#
         ))
         .unwrap_or_default();
-        if let Some(po_token) = po_token {
-            query
-                .as_object_mut()
-                .expect("Declared as object above")
-                .insert(
-                    "serviceIntegrityDimensions".to_string(),
-                    json!({"poToken": po_token}),
-                );
-        }
-
         static CONFIGS: Lazy<(HeaderMap, &str)> = Lazy::new(|| {
             (HeaderMap::from_iter([
             (HeaderName::from_str("content-type").unwrap(), HeaderValue::from_str("application/json").unwrap()),

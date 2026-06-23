@@ -248,9 +248,6 @@ pub struct RequestOptions {
     ///     };
     /// ```
     pub max_retries: Option<u32>,
-    /// Supply a YouTube Proof of Origin token. Use at your own risk.
-    /// See https://github.com/yt-dlp/yt-dlp/wiki/Extractors#po-token-guide for more information.
-    pub po_token: Option<String>,
 }
 
 #[derive(thiserror::Error, Debug)]
