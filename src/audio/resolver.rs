@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug)]
 pub enum ResolvedInput {
     Playlist(Vec<Track>),
-    Track(Track),
+    Track(Box<Track>),
     SearchResults(Vec<Track>),
 }
 
@@ -25,7 +25,7 @@ impl ResolvedInput {
     pub fn into_tracks_or_top(self) -> Vec<Track> {
         match self {
             ResolvedInput::Playlist(tracks) => tracks,
-            ResolvedInput::Track(track) => vec![track],
+            ResolvedInput::Track(track) => vec![*track],
             ResolvedInput::SearchResults(mut tracks) => {
                 if tracks.is_empty() {
                     vec![]
@@ -356,27 +356,6 @@ async fn perform_parallel_search(
     )
     .await?;
 
-    if all_scored.is_empty()
-        && crate::audio::runtime::ytdlp_enabled()
-        && !crate::audio::runtime::is_youtube_degraded()
-    {
-        let yt = YouTubeProvider;
-        match yt.search_fallback_ytdl(search_query).await {
-            Ok(candidates) => {
-                all_scored.extend(score_provider_candidates(
-                    candidates,
-                    search_query,
-                    expected_title,
-                    expected_artist,
-                    expected_duration,
-                ));
-            }
-            Err(err) => {
-                tracing::warn!(query = %search_query, %err, "ytsearch fallback failed");
-            }
-        }
-    }
-
     all_scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     Ok(all_scored)
 }
@@ -406,20 +385,6 @@ async fn collect_search_results(
 
     let mut scored = trusted_results;
     scored.extend(provider_results?);
-
-    if crate::audio::runtime::ytdlp_enabled() && !crate::audio::runtime::is_youtube_degraded() {
-        let yt = YouTubeProvider;
-        match yt.search_fallback_ytdl(query).await {
-            Ok(candidates) => {
-                scored.extend(score_provider_candidates(
-                    candidates, query, query, None, None,
-                ));
-            }
-            Err(err) => {
-                tracing::debug!(query, %err, "ytsearch select-list fallback failed");
-            }
-        }
-    }
 
     scored.sort_by(|a, b| {
         source_priority(&a.0.source)
@@ -711,14 +676,14 @@ pub async fn resolve_input(
             {
                 cached_track.requester_id = serenity::UserId::new(user_id);
                 tracing::info!(query = %query_trimmed, cache = "hit", "cache_hit");
-                return Ok(ResolvedInput::Track(cached_track));
+                return Ok(ResolvedInput::Track(Box::new(cached_track)));
             }
         } else if let Some(mut cached_track) =
             crate::audio::source::cache_get_metadata(query_trimmed).await
         {
             cached_track.requester_id = serenity::UserId::new(user_id);
             tracing::info!(query = %query_trimmed, cache = "hit", "cache_hit");
-            return Ok(ResolvedInput::Track(cached_track));
+            return Ok(ResolvedInput::Track(Box::new(cached_track)));
         }
 
         tracing::info!(query = %query_trimmed, cache = "miss", "cache_miss");
@@ -747,7 +712,7 @@ pub async fn resolve_input(
             if let ResolvedInput::Track(ref track) = res {
                 crate::audio::source::cache_set_url_metadata(
                     query_trimmed.to_owned(),
-                    track.clone(),
+                    track.as_ref().clone(),
                 )
                 .await;
             }
@@ -767,7 +732,7 @@ pub async fn resolve_input(
             if let ResolvedInput::Track(ref track) = res {
                 crate::audio::source::cache_set_url_metadata(
                     query_trimmed.to_owned(),
-                    track.clone(),
+                    track.as_ref().clone(),
                 )
                 .await;
             }
@@ -787,7 +752,7 @@ pub async fn resolve_input(
             if let ResolvedInput::Track(ref track) = res {
                 crate::audio::source::cache_set_url_metadata(
                     query_trimmed.to_owned(),
-                    track.clone(),
+                    track.as_ref().clone(),
                 )
                 .await;
             }
@@ -804,7 +769,7 @@ pub async fn resolve_input(
                     track.clone(),
                 )
                 .await;
-                Ok(ResolvedInput::Track(track))
+                Ok(ResolvedInput::Track(Box::new(track)))
             } else {
                 Err(SerenyaError::Audio(
                     "Failed to load YouTube track".to_owned(),
@@ -825,7 +790,7 @@ pub async fn resolve_input(
                         track.clone(),
                     )
                     .await;
-                    Ok(ResolvedInput::Track(track))
+                    Ok(ResolvedInput::Track(Box::new(track)))
                 }
             } else {
                 Err(SerenyaError::Audio(
@@ -842,7 +807,7 @@ pub async fn resolve_input(
                     track.clone(),
                 )
                 .await;
-                Ok(ResolvedInput::Track(track))
+                Ok(ResolvedInput::Track(Box::new(track)))
             } else {
                 Err(SerenyaError::Audio(
                     "Failed to load direct URL track".to_owned(),
@@ -1047,7 +1012,7 @@ fn evaluate_confidence_and_respond(
             }
         });
 
-        Ok(ResolvedInput::Track(track))
+        Ok(ResolvedInput::Track(Box::new(track)))
     }
 }
 
@@ -2119,12 +2084,6 @@ pub async fn resolve_ytsearch_track(
         Ok(())
     } else {
         let mut candidates = YouTubeProvider.search(&query, http_client).await?;
-        if candidates.is_empty()
-            && crate::audio::runtime::ytdlp_enabled()
-            && let Ok(ytdl_candidates) = YouTubeProvider.search_fallback_ytdl(&query).await
-        {
-            candidates = ytdl_candidates;
-        }
 
         let best_candidate = if let Some(expected) = track.duration {
             candidates.sort_by(|a, b| {
@@ -2263,5 +2222,49 @@ mod tests {
         assert_eq!(tracks[0].title, "Hello");
         assert_eq!(tracks[0].uri, "spotify:track:123");
         assert_eq!(tracks[0].duration, Some(1000));
+    }
+
+    #[tokio::test]
+    async fn test_spotify_playlist_resolution() -> Result<(), Box<dyn std::error::Error>> {
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()?;
+        let tracks = resolve_spotify_playlist("0rDIyaLtoI8Dpw58rsDspw", 1, 1, &http_client).await?;
+
+        assert!(
+            !tracks.is_empty(),
+            "Spotify playlist should resolve at least one track"
+        );
+
+        for mut track in tracks.into_iter().take(1) {
+            resolve_ytsearch_track(&mut track, &http_client).await?;
+            assert!(
+                track.url.contains("youtube.com/") || track.url.contains("youtu.be/"),
+                "Spotify track should resolve to a YouTube URL, got {}",
+                track.url
+            );
+
+            let stream =
+                crate::audio::source::extract_stream_url_for_guild(9_001, &track.url).await?;
+            assert!(
+                stream.url.contains("googlevideo.com")
+                    || stream.url.contains("googleusercontent.com"),
+                "native resolver should return a direct Google media URL"
+            );
+
+            let probe =
+                youtube_resolver::probe_resolved_stream_health(&stream, 32 * 1024, 10.0).await?;
+
+            println!(
+                "spotify playlist probe: title={}, client={}, source={}, bytes={}, speed={:.2} KB/s",
+                track.title,
+                stream.client_kind,
+                stream.resolve_source,
+                probe.total_bytes,
+                probe.speed_kbps
+            );
+        }
+
+        Ok(())
     }
 }

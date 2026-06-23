@@ -1101,20 +1101,8 @@ impl MetadataProvider for DeezerProvider {
 }
 
 // ----------------------------------------------------
-// YouTube Provider (Scraper & yt-dlp fallback)
+// YouTube Provider (native scraper)
 // ----------------------------------------------------
-#[derive(serde::Deserialize, Debug)]
-struct YtDlpSearchResult {
-    entries: Option<Vec<YtDlpEntry>>,
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct YtDlpEntry {
-    title: Option<String>,
-    id: Option<String>,
-    duration: Option<f64>,
-}
-
 pub struct YouTubeProvider;
 
 impl YouTubeProvider {
@@ -1348,48 +1336,6 @@ impl YouTubeProvider {
                         break;
                     }
                 }
-            }
-        }
-
-        Ok(candidates)
-    }
-
-    pub(crate) async fn search_fallback_ytdl(
-        &self,
-        query: &str,
-    ) -> Result<Vec<TrackCandidate>, SerenyaError> {
-        let settings = crate::audio::runtime::settings();
-        let output = crate::audio::runtime::run_ytdlp(
-            "ytsearch fallback",
-            vec![
-                "--flat-playlist".to_owned(),
-                "--dump-single-json".to_owned(),
-                format!("ytsearch5:{query}"),
-            ],
-            crate::audio::runtime::duration_from_millis(settings.ytsearch_timeout_ms),
-            true,
-            Some(crate::audio::runtime::negative_cache_key("ytsearch", query)),
-        )
-        .await?;
-
-        let search_result: YtDlpSearchResult = serde_json::from_slice(&output.stdout)
-            .map_err(|e| SerenyaError::Audio(format!("Failed to parse yt-dlp results: {}", e)))?;
-
-        let entries = search_result.entries.unwrap_or_default();
-        let mut candidates = Vec::new();
-        for entry in entries {
-            if let Some(id) = entry.id {
-                candidates.push(TrackCandidate {
-                    source: "yt-dlp".to_owned(),
-                    title: entry.title.unwrap_or_else(|| "Unknown Title".to_string()),
-                    artist: "Unknown Artist".to_owned(),
-                    duration: entry.duration.map(|d| Duration::from_secs(d as u64)),
-                    popularity: None,
-                    is_official: false,
-                    is_topic_channel: false,
-                    url: format!("https://www.youtube.com/watch?v={}", id),
-                    thumbnail: None,
-                });
             }
         }
 
