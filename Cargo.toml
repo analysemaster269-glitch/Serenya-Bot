@@ -5,42 +5,67 @@ edition = "2024"
 rust-version = "1.96.0"
 description = "A multi-guild Discord music bot"
 
+[workspace.dependencies]
+reqwest = { version = "0.13", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+tokio = { version = "1", features = ["full"] }
+thiserror = { version = "2" }
+tracing = { version = "0.1" }
+async-trait = { version = "0.1" }
+moka = { version = "0.12", features = ["future"] }
+sha1 = { version = "0.10" }
+boa_engine = { version = "0.21.0" }
+url = { version = "2" }
+regex = { version = "1" }
+rand = { version = "0.9" }
+mime = { version = "0.3" }
+
 [dependencies]
 poise = "0.6"
 serenity = { version = "0.12", default-features = false, features = [
     "client", "gateway", "model", "rustls_backend", "cache", "voice"
 ] }
 songbird = { version = "0.6", features = ["builtin-queue"] }
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
+tokio = { workspace = true }
+serde = { workspace = true }
 serde-saphyr = "0.0.27"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip", "brotli"] }
-thiserror = "2"
-tracing = "0.1"
+reqwest = { workspace = true, features = ["rustls", "json", "gzip", "brotli"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 dashmap = "6"
 chrono = { version = "0.4", features = ["serde"] }
-rand = "0.9"
+rand = { workspace = true }
 tokio-util = "0.7"
-async-trait = "0.1"
-serde_json = "1"
+async-trait = { workspace = true }
+serde_json = { workspace = true }
 hmac = "0.12"
-sha1 = "0.10"
+sha1 = { workspace = true }
 symphonia = { version = "0.5.2", features = ["aac", "isomp4", "mp3", "mkv", "ogg", "vorbis", "wav"] }
-moka = { version = "0.12", features = ["future"] }
+moka = { workspace = true }
 youtube_resolver = { path = "crates/youtube_resolver" }
 uuid = "1"
 strsim = "0.11"
 percent-encoding = "2"
 arc-swap = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [profile.release]
-lto = true
+opt-level = 3
+lto = "fat"
 codegen-units = 1
 strip = true
+panic = "abort"
+
+# Compile third-party dependencies with optimization level 2 even in dev/debug mode
+# to prevent lag and stutters while running Serenya-Bot in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
 
 [workspace]
 members = [
     "crates/rusty-ytdl", "crates/youtube_resolver",
 ]
+
 
