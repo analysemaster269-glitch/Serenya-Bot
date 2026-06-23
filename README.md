@@ -4,7 +4,7 @@ Serenya Bot is a Rust-based Discord music bot built for stable playback, low lat
 
 ## Current Project Status
 
-- Main crate version: `serenya` `1.1.1`.
+- Main crate version: `serenya` `1.1.1` (Optimized version over 1.1.0 workspace ytdl resolver).
 - Rust edition: `2024`.
 - Declared Rust toolchain: `rust-version = "1.96.0"`.
 - Workspace members:
@@ -27,6 +27,15 @@ Serenya Bot is a Rust-based Discord music bot built for stable playback, low lat
 - Metadata cache, stream cache, negative cache, resolver timeouts, and resolver concurrency limits.
 - Graceful shutdown and atomic database writes through `.tmp` and `.bak` files.
 - Typed domain errors through `SerenyaError`, converted to boxed framework errors only at command boundaries when needed.
+
+## Performance & Optimizations (v1.1.1)
+
+Version 1.1.1 introduces significant performance optimizations and architectural improvements over the v1.1.0 baseline:
+- **Zero Deadlocks**: Safely resolved critical `DashMap` read lock blocking deadlocks in monitor and statistics threads. 
+- **Non-blocking Execution**: Eliminated `tokio` runtime blocking during `ffmpeg` child process spawning via `tokio::task::spawn_blocking` and moved synchronous tasks like `configure_path` out of async context.
+- **Lock-free Data Access**: Integrated `arc-swap` to eliminate `RwLock` bottlenecks when querying dynamic runtime and Spotify configuration settings.
+- **Memory & Allocation Efficiency**: Upgraded the `Track` core data structure from `String` allocations to lightweight `Option<String>` and `Arc<ResolvedStream>` patterns to drastically reduce allocation overhead on metadata resolution operations.
+- **O(N) Secret Redaction**: Replaced costly sequential `replace()` calls in the logging module with the `aho-corasick` crate, delivering optimal time-complexity when filtering logging secrets.
 
 ## Native YouTube Resolver
 
@@ -310,6 +319,10 @@ Serenya builds on ideas and libraries from the Rust, Discord, and audio communit
 - Thanks to [yt-dlp](https://github.com/yt-dlp/yt-dlp) for public research into YouTube extraction, signature deciphering, and edge cases.
 - Thanks to `serenity`, `poise`, `songbird`, `tokio`, `reqwest`, `boa_engine`, `moka`, `tracing`, and the Rust community.
 - Thanks to the public provider documentation and behavior that helped validate metadata flows for Spotify, Deezer, Apple Music, SoundCloud, YouTube, and YouTube Music.
+
+## Citations
+- Aho-Corasick Algorithm for O(N) multi-pattern matching used in log redaction: [aho-corasick](https://crates.io/crates/aho-corasick).
+- ArcSwap pattern used for atomic fast RCU (Read-Copy-Update) on global settings: [arc-swap](https://crates.io/crates/arc-swap).
 
 ## License
 

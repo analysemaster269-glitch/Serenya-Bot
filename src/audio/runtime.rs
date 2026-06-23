@@ -15,7 +15,6 @@ const YOUTUBE_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 #[derive(Clone, Debug)]
 pub struct NegativeCacheEntry {
     pub reason: String,
-    inserted_at: Instant,
 }
 
 struct ResolverRuntime {
@@ -246,7 +245,6 @@ fn clear_youtube_degraded_if_expired() {
 pub async fn remember_negative(key: String, reason: String) {
     let entry = NegativeCacheEntry {
         reason,
-        inserted_at: Instant::now(),
     };
     RESOLVER_RUNTIME.negative_cache.insert(key, entry).await;
 }
