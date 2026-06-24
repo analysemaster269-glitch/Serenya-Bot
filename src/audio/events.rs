@@ -66,18 +66,24 @@ impl EventHandler for TrackEndHandler {
                     drop(player_lock_ref);
                     let mut player = player_lock.write().await;
                     player.consecutive_errors += 1;
+                    let consecutive_errors = player.consecutive_errors;
                     retry_current = true;
 
-                    if let Some(np) = &mut player.now_playing {
-                        crate::audio::source::cache_invalidate_stream(&np.url).await;
+                    let url_opt = player.now_playing.as_ref().map(|np| np.url.clone());
+                    if let Some(ref mut np) = player.now_playing {
                         np.resolved_url = None;
+                    }
+                    drop(player);
+
+                    if let Some(url) = url_opt {
+                        crate::audio::source::cache_invalidate_stream(&url).await;
                     }
 
                     tracing::warn!(
                         guild_id = %self.ctx.guild_id,
-                        consecutive_errors = player.consecutive_errors,
+                        consecutive_errors,
                         "Consecutive errors count: {}",
-                        player.consecutive_errors
+                        consecutive_errors
                     );
                 }
             }
@@ -113,16 +119,20 @@ impl EventHandler for TrackErrorHandler {
                 drop(player_lock_ref);
                 let mut player = player_lock.write().await;
                 player.consecutive_errors += 1;
+                let consecutive_errors = player.consecutive_errors;
+                let url_opt = player.now_playing.as_ref().map(|np| np.url.clone());
+                drop(player);
+
                 tracing::warn!(
                     guild_id = %self.ctx.guild_id,
-                    consecutive_errors = player.consecutive_errors,
+                    consecutive_errors,
                     "Track errored: consecutive errors count: {}",
-                    player.consecutive_errors
+                    consecutive_errors
                 );
 
                 // Invalidate stream cache for the errored track
-                if let Some(np) = &player.now_playing {
-                    crate::audio::source::cache_invalidate_stream(&np.url).await;
+                if let Some(url) = url_opt {
+                    crate::audio::source::cache_invalidate_stream(&url).await;
                 }
             }
         }
@@ -138,12 +148,9 @@ async fn fail_and_maybe_advance(
     track_title: &str,
     announce_channel: Option<serenity::ChannelId>,
 ) -> Result<(), SerenyaError> {
-    let consecutive_errors = {
+    let (consecutive_errors, url_opt) = {
         let mut player = player_lock.write().await;
         player.consecutive_errors += 1;
-
-        // Invalidate stream cache for the failed track
-        crate::audio::source::cache_invalidate_stream(track_url).await;
 
         if player
             .now_playing
@@ -155,8 +162,13 @@ async fn fail_and_maybe_advance(
             player.current_track_handle = None;
             player.playback_status = crate::core::PlaybackStatus::Idle;
         }
-        player.consecutive_errors
+        (player.consecutive_errors, Some(track_url.to_string()))
     };
+
+    // Invalidate stream cache for the failed track outside the lock
+    if let Some(url) = url_opt {
+        crate::audio::source::cache_invalidate_stream(&url).await;
+    }
 
     if consecutive_errors >= 3 {
         tracing::error!(

@@ -13,6 +13,7 @@ pub async fn play(
     #[rest]
     query: String,
 ) -> Result<(), Error> {
+    tracing::info!("Play invoked: query={:?}", query);
     let guild_id = ctx
         .guild_id()
         .ok_or_else(|| SerenyaError::Config("This command can only be used in a server.".into()))?;
@@ -43,14 +44,18 @@ pub async fn play(
     let user_id = ctx.author().id.get();
     let db_ref = &ctx.data().database;
     let http_ref = &ctx.data().http_client;
+    tracing::info!("Joining voice channel: {:?}", user_channel_id);
     let (call_result, resolved) = tokio::join!(
         async {
             if let Some(call) = manager.get(guild_id) {
+                tracing::info!("Already connected to voice");
                 Ok::<_, SerenyaError>(call)
             } else {
+                tracing::info!("Voice connect start: joining channel {:?}", user_channel_id);
                 let call = manager.join(guild_id, user_channel_id).await.map_err(|e| {
                     SerenyaError::Voice(format!("Failed to join voice channel: {}", e))
                 })?;
+                tracing::info!("Voice connect complete: channel {:?}", user_channel_id);
                 let _ = crate::audio::quality::apply_bitrate(ctx, guild_id, user_channel_id).await;
                 Ok(call)
             }
@@ -166,7 +171,9 @@ pub(crate) async fn enqueue_and_play_resolved(
         .or_insert_with(|| std::sync::Arc::new(tokio::sync::RwLock::new(GuildPlayer::new())))
         .clone();
 
+    tracing::info!("Getting guild player write lock");
     let mut player = player_lock.write().await;
+    tracing::info!("Guild player write lock acquired");
     player.voice_channel = Some(user_channel_id);
     player.announce_channel = Some(ctx.channel_id());
 
@@ -332,6 +339,7 @@ pub(crate) async fn enqueue_and_play_resolved(
 
             let mut call = call_lock_clone.lock().await;
             let handle = call.play_input(source);
+            tracing::info!("Playback started for track: {:?}", current_track.title);
 
             // 4. Register event handlers
             let playback_ctx = crate::audio::events::PlaybackContext {
@@ -441,11 +449,14 @@ pub(crate) async fn enqueue_and_play_resolved(
         let requester_name = ctx.author().name.clone();
         for t in &mut tracks {
             t.requester_name = Some(requester_name.clone());
+            tracing::info!("Queueing track: {:?}", t.title);
         }
 
         let added = player.queue.push_batch(tracks, max_queue_size)?;
+        tracing::info!("Track enqueued: count={}", added);
 
         if added == 0 {
+            drop(player);
             let embed =
                 crate::discord::embeds::error_embed("Queue is full! Could not add any tracks.");
             let reply = poise::CreateReply::default().embed(embed);
@@ -461,9 +472,11 @@ pub(crate) async fn enqueue_and_play_resolved(
                 .await?;
         } else if added == 1 && track_count == 1 {
             let queue_pos = player.queue.len();
-            if let Some(track) = player.queue.get(queue_pos - 1) {
+            let track_opt = player.queue.get(queue_pos - 1).cloned();
+            drop(player);
+            if let Some(track) = track_opt {
                 let embed = crate::discord::embeds::track_added_embed(
-                    track,
+                    &track,
                     queue_pos,
                     &ctx.data().config(),
                 );
@@ -473,6 +486,7 @@ pub(crate) async fn enqueue_and_play_resolved(
                 ctx.say(format!("📝 **Enqueued:** {}", first_title)).await?;
             }
         } else {
+            drop(player);
             let embed = serenity::CreateEmbed::new()
                 .title("📝 Tracks Enqueued")
                 .description(format!(
@@ -643,30 +657,33 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
 /// Helper to count VC users and perform vote skip logic.
 async fn process_vote_skip(
     ctx: Context<'_>,
-    player: &mut GuildPlayer,
+    player_lock: &std::sync::Arc<tokio::sync::RwLock<GuildPlayer>>,
     guild: &serenity::Guild,
 ) -> Result<bool, Error> {
-    let vc_channel_id = player
-        .voice_channel
-        .ok_or_else(|| SerenyaError::Voice("Bot is not in a voice channel.".into()))?;
+    let (current_votes, required_votes) = {
+        let mut player = player_lock.write().await;
+        let vc_channel_id = player
+            .voice_channel
+            .ok_or_else(|| SerenyaError::Voice("Bot is not in a voice channel.".into()))?;
 
-    let mut human_count: usize = 0;
-    for state in guild.voice_states.values() {
-        if state.channel_id == Some(vc_channel_id) {
-            let is_bot = ctx
-                .cache()
-                .user(state.user_id)
-                .map(|u| u.bot)
-                .unwrap_or(false);
-            if !is_bot {
-                human_count += 1;
+        let mut human_count: usize = 0;
+        for state in guild.voice_states.values() {
+            if state.channel_id == Some(vc_channel_id) {
+                let is_bot = ctx
+                    .cache()
+                    .user(state.user_id)
+                    .map(|u| u.bot)
+                    .unwrap_or(false);
+                if !is_bot {
+                    human_count += 1;
+                }
             }
         }
-    }
 
-    let required_votes = human_count.div_ceil(2).max(1);
-    player.skip_votes.insert(ctx.author().id);
-    let current_votes = player.skip_votes.len();
+        let required_votes = human_count.div_ceil(2).max(1);
+        player.skip_votes.insert(ctx.author().id);
+        (player.skip_votes.len(), required_votes)
+    };
 
     if current_votes >= required_votes {
         Ok(true)
@@ -687,22 +704,26 @@ async fn process_vote_skip(
 /// Helper to handle requester absence checks and skip timers.
 async fn check_requester_absence(
     ctx: Context<'_>,
-    player: &mut GuildPlayer,
+    player_lock: &std::sync::Arc<tokio::sync::RwLock<GuildPlayer>>,
     track_requester_id: Option<serenity::UserId>,
     guild: &serenity::Guild,
 ) -> Result<bool, Error> {
-    let requester_in_vc = if let Some(req_id) = track_requester_id {
-        if let Some(user_state) = guild.voice_states.get(&req_id) {
-            user_state.channel_id == player.voice_channel
+    let (requester_in_vc, timer_status) = {
+        let player = player_lock.read().await;
+        let requester_in_vc = if let Some(req_id) = track_requester_id {
+            if let Some(user_state) = guild.voice_states.get(&req_id) {
+                user_state.channel_id == player.voice_channel
+            } else {
+                false
+            }
         } else {
             false
-        }
-    } else {
-        false
+        };
+        (requester_in_vc, player.requester_absence_timer)
     };
 
     if !requester_in_vc {
-        if let Some(timer) = player.requester_absence_timer {
+        if let Some(timer) = timer_status {
             if timer.elapsed().as_secs() > 60 {
                 Ok(true)
             } else {
@@ -719,7 +740,10 @@ async fn check_requester_absence(
                 Ok(false)
             }
         } else {
-            player.requester_absence_timer = Some(std::time::Instant::now());
+            {
+                let mut player = player_lock.write().await;
+                player.requester_absence_timer = Some(std::time::Instant::now());
+            }
             let embed = crate::discord::embeds::playback_status_embed(
                 "⏳ Skip Timer",
                 "The original requester is not in the VC. A 60-second skip timer has been started.",
@@ -729,7 +753,7 @@ async fn check_requester_absence(
             Ok(false)
         }
     } else {
-        process_vote_skip(ctx, player, guild).await
+        process_vote_skip(ctx, player_lock, guild).await
     }
 }
 
@@ -749,10 +773,12 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
 
-    let mut player = player_lock.write().await;
+    let player = player_lock.write().await;
     if player.now_playing.is_none() {
+        drop(player);
         let embed = crate::discord::embeds::playback_status_embed(
             "❌ Error",
             "Nothing is currently playing.",
@@ -767,6 +793,10 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
     let track_requester_id = player.now_playing.as_ref().map(|t| t.requester_id);
 
     let can_skip = author_id.get() == owner_id || Some(author_id) == track_requester_id;
+    
+    // Drop write lock before checking requester absence or executing skip (which awaits and gets its own locks)
+    drop(player);
+
     let approved = if can_skip {
         true
     } else {
@@ -774,18 +804,37 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
             .guild()
             .ok_or_else(|| SerenyaError::NotFound("Guild not found".into()))?
             .clone();
-        check_requester_absence(ctx, &mut player, track_requester_id, &guild).await?
+        check_requester_absence(ctx, &player_lock, track_requester_id, &guild).await?
     };
 
     if approved {
+        let mut player = player_lock.write().await;
+        if player.now_playing.is_none() {
+            drop(player);
+            let embed = crate::discord::embeds::playback_status_embed(
+                "❌ Error",
+                "Nothing is currently playing.",
+                0xED4245,
+            );
+            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+            return Ok(());
+        }
+
+        player.skip_forced = true;
+        let has_handle = player.current_track_handle.is_some();
+        let handle_opt = player.current_track_handle.take();
+
+        drop(player);
+
         let embed =
             crate::discord::embeds::playback_status_embed("⏭️ Skip", "Skipping track...", 0x5865F2);
         ctx.send(poise::CreateReply::default().embed(embed)).await?;
-        player.skip_forced = true;
-        if let Some(ref handle) = player.current_track_handle {
-            let _ = handle.stop();
+
+        if has_handle {
+            if let Some(handle) = handle_opt {
+                let _ = handle.stop();
+            }
         } else {
-            drop(player);
             crate::audio::events::play_next(
                 crate::audio::events::PlaybackContext {
                     guild_id,

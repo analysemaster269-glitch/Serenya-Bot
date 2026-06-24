@@ -275,6 +275,7 @@ pub async fn replay(ctx: Context<'_>) -> Result<(), Error> {
 
     if let Some(handle) = &player.current_track_handle {
         let _ = handle.seek(Duration::from_secs(0));
+        drop(player);
         let embed = crate::discord::embeds::playback_status_embed(
             "🔄 Replay",
             "Replaying current track from the beginning.",
@@ -282,14 +283,15 @@ pub async fn replay(ctx: Context<'_>) -> Result<(), Error> {
         );
         ctx.send(poise::CreateReply::default().embed(embed)).await?;
     } else if let Some(prev) = player.previous_track.take() {
+        let prev_title = prev.title.clone();
+        player.queue.push_front(prev);
+        drop(player);
         let embed = crate::discord::embeds::playback_status_embed(
             "🔄 Replay",
-            &format!("Replaying previous track: **{}**", prev.title),
+            &format!("Replaying previous track: **{}**", prev_title),
             0x5865F2,
         );
         ctx.send(poise::CreateReply::default().embed(embed)).await?;
-        player.queue.push_front(prev);
-        drop(player);
         crate::audio::events::play_next(
             crate::audio::events::PlaybackContext {
                 guild_id,
@@ -304,6 +306,7 @@ pub async fn replay(ctx: Context<'_>) -> Result<(), Error> {
         )
         .await?;
     } else {
+        drop(player);
         let embed = crate::discord::embeds::playback_status_embed(
             "❌ Error",
             "Nothing is playing, and there is no previous track.",
@@ -338,6 +341,20 @@ pub async fn previous(ctx: Context<'_>) -> Result<(), Error> {
         .take()
         .ok_or_else(|| SerenyaError::NotFound("No previous track found.".into()))?;
 
+    if let Some(mut curr) = player.now_playing.take() {
+        curr.resolved_url = None;
+        player.queue.push_front(curr);
+    }
+    let mut prev_to_play = prev.clone();
+    prev_to_play.resolved_url = None;
+    player.queue.push_front(prev_to_play);
+
+    player.skip_forced = true;
+    let has_handle = player.current_track_handle.is_some();
+    let handle_opt = player.current_track_handle.take();
+
+    drop(player);
+
     let embed = crate::discord::embeds::playback_status_embed(
         "⏮️ Previous",
         &format!("Playing previous track: **{}**", prev.title),
@@ -345,19 +362,11 @@ pub async fn previous(ctx: Context<'_>) -> Result<(), Error> {
     );
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
-    if let Some(mut curr) = player.now_playing.take() {
-        curr.resolved_url = None;
-        player.queue.push_front(curr);
-    }
-    let mut prev = prev;
-    prev.resolved_url = None;
-    player.queue.push_front(prev);
-
-    player.skip_forced = true;
-    if let Some(handle) = &player.current_track_handle {
-        let _ = handle.stop();
+    if has_handle {
+        if let Some(handle) = handle_opt {
+            let _ = handle.stop();
+        }
     } else {
-        drop(player);
         crate::audio::events::play_next(
             crate::audio::events::PlaybackContext {
                 guild_id,
@@ -428,6 +437,12 @@ pub async fn jump(
     };
 
     let skipped = player.queue.jump(index)?;
+    player.skip_forced = true;
+    let has_handle = player.current_track_handle.is_some();
+    let handle_opt = player.current_track_handle.take();
+
+    drop(player);
+
     let embed = crate::discord::embeds::playback_status_embed(
         "⏭️ Jump",
         &format!(
@@ -438,11 +453,11 @@ pub async fn jump(
     );
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
-    player.skip_forced = true;
-    if let Some(handle) = &player.current_track_handle {
-        let _ = handle.stop();
+    if has_handle {
+        if let Some(handle) = handle_opt {
+            let _ = handle.stop();
+        }
     } else {
-        drop(player);
         crate::audio::events::play_next(
             crate::audio::events::PlaybackContext {
                 guild_id,
@@ -504,6 +519,7 @@ pub async fn r#move(
     };
 
     player.queue.move_item(from_idx, to_idx)?;
+    drop(player);
     let embed = crate::discord::embeds::playback_status_embed(
         "↕️ Move",
         &format!("Moved track from #{from} to #{to}."),
