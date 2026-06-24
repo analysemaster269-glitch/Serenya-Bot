@@ -10,7 +10,7 @@ Serenya Bot is a Rust-based Discord music bot built for stable playback, low lat
 - Workspace members:
   - `serenya`: the main Discord bot.
   - `crates/youtube_resolver`: the native Rust YouTube stream resolver.
-  - `crates/rusty-ytdl`: the internal Rust YouTube parsing foundation used by the resolver work.
+  - `crates/rusty-ytdl`: the internal Rust YouTube parsing foundation used by the native resolver.
 
 ## Key Features
 
@@ -31,8 +31,8 @@ Serenya Bot is a Rust-based Discord music bot built for stable playback, low lat
 ## Performance & Optimizations (v1.1.1)
 
 Version 1.1.1 introduces significant performance optimizations and architectural improvements over the v1.1.0 baseline:
-- **Zero Deadlocks**: Safely resolved critical `DashMap` read lock blocking deadlocks in monitor and statistics threads. 
-- **Non-blocking Execution**: Eliminated `tokio` runtime blocking during `ffmpeg` child process spawning via `tokio::task::spawn_blocking` and moved synchronous tasks like `configure_path` out of async context.
+- **Zero Deadlocks**: Safely resolved deadlocks caused by concurrent `DashMap` read locks in the monitor and statistics threads. 
+- **Non-blocking Execution**: Eliminated `tokio` runtime thread-blocking during `ffmpeg` child process spawning using `tokio::task::spawn_blocking`, and moved synchronous startup initialization tasks (like `configure_path`) out of the main async context.
 - **Lock-free Data Access**: Integrated `arc-swap` to eliminate `RwLock` bottlenecks when querying dynamic runtime and Spotify configuration settings.
 - **Memory & Allocation Efficiency**: Upgraded the `Track` core data structure from `String` allocations to lightweight `Option<String>` and `Arc<ResolvedStream>` patterns to drastically reduce allocation overhead on metadata resolution operations.
 - **O(N) Secret Redaction**: Replaced costly sequential `replace()` calls in the logging module with the `aho-corasick` crate, delivering optimal time-complexity when filtering logging secrets.
@@ -50,9 +50,9 @@ Serenya includes the internal `youtube_resolver` crate as the native replacement
   3. `IOS`
   4. `ANDROID`
   5. `TVHTML5`
-- Keeps audio format selection in `format_selector`.
+- Implements a custom `format_selector` for selecting audio formats.
 - Prefers audio-only, non-DRM WebM Opus before M4A/AAC.
-- Uses `boa_engine` in `js_solver` to handle signature cipher and `n` throttling when required.
+- Uses `boa_engine` in `js_solver` to handle signature deciphering and `n`-parameter throttling when required.
 - Uses a SHA-1 hash of `player_url` as the cache-key prefix to avoid collisions between different `base.js` versions.
 - Uses `stream_probe` to range-read a stream before playback and catch HTTP 403 responses or throttled streams early.
 - Returns `ResolvedStream` metadata, including URL, client kind, user agent, MIME type, bitrate, and resolve source so FFmpeg can use stream-specific headers.
@@ -160,6 +160,7 @@ Use a secondary account where possible. This cookie grants access to your Spotif
 > If a downloaded release binary crashes or fails to run on your system (e.g., triggering `Illegal Instruction` or `core dumped`), please clone the repository and build the binary yourself on the target machine:
 > ```bash
 > cargo build --release
+> # Or compile with Profile-Guided Optimization (PGO) for maximum performance (see the PGO section below)
 > ```
 
 ```powershell
@@ -185,6 +186,36 @@ cargo run --release
 ```
 
 If FFmpeg or `yt-dlp` is missing from `PATH`, the runtime installer will try to download a matching binary. For production servers, installing dependencies through the system package manager is usually easier to maintain.
+
+## Profile-Guided Optimization (PGO)
+
+To achieve the highest possible runtime performance, Serenya-Bot supports **Profile-Guided Optimization (PGO)** with target CPU optimizations. This process profiles the application under a realistic workload to optimize hot execution paths (such as audio decoding, JS signature solver engine, and JSON parsing).
+
+### Prerequisites
+Make sure you have the `llvm-tools` component installed via `rustup` since it is required to merge profiling data:
+```powershell
+rustup component add llvm-tools
+```
+
+### Windows (PowerShell)
+Run the interactive script:
+```powershell
+.\build-pgo.ps1
+```
+1. The script compiles an instrumented version of the bot.
+2. Start the bot (`.\target\pgo-gen\serenya.exe`) and interact with it (play some tracks, search songs, etc.) to gather profiling logs.
+3. Close the bot, go back to the PowerShell window, and press **Enter** to continue.
+4. The script merges the logs and compiles the final optimized binary at `.\target\pgo-use\serenya.exe`.
+
+### Linux (Bash)
+Make the build script executable and run it:
+```bash
+chmod +x build-pgo.sh
+./build-pgo.sh
+```
+1. The script builds the instrumented version.
+2. Start the bot (`./target/pgo-gen/serenya`) and execute music playback commands in Discord to gather real runtime profiles.
+3. Stop the bot, go back to the terminal, and press **Enter** to merge profiles and compile the final optimized binary at `./target/pgo-use/serenya`.
 
 ## Discord Commands
 
