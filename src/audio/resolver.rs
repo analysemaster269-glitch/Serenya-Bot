@@ -419,7 +419,7 @@ async fn collect_search_results(
             source_provider: format!(
                 "{} • {:.0}%",
                 candidate.source,
-                if score >= 10.0 { score - 10.0 } else { score } * 100.0
+                score * 100.0
             ),
         })
         .collect();
@@ -545,10 +545,15 @@ async fn run_provider_batch(
                 continue;
             }
 
-            let candidates: Vec<_> = candidates
-                .into_iter()
-                .filter(|c| seen_urls.insert(c.url.clone()))
-                .collect();
+            let mut candidates = candidates;
+            candidates.retain(|c| {
+                if seen_urls.contains(&c.url) {
+                    false
+                } else {
+                    seen_urls.insert(c.url.clone());
+                    true
+                }
+            });
             if candidates.is_empty() {
                 continue;
             }
@@ -982,7 +987,7 @@ fn evaluate_confidence_and_respond(
                 source_provider: format!(
                     "{} • {:.0}%",
                     cand.source,
-                    if score >= 10.0 { score - 10.0 } else { score } * 100.0
+                    score * 100.0
                 ),
             });
         }
@@ -1258,32 +1263,108 @@ async fn resolve_spotify_album_fallback(
     Ok(tracks)
 }
 
-async fn resolve_spotify_playlist_api(
-    playlist_id: &str,
-    limit: usize,
-    user_id: u64,
+async fn spotify_partner_post(
     http_client: &reqwest::Client,
-) -> Result<Vec<Track>, SerenyaError> {
-    tracing::debug!("Requesting Spotify session info for playlist resolution...");
+    gql_body: &serde_json::Value,
+) -> Result<serde_json::Value, SerenyaError> {
     let session_info =
         crate::audio::providers::get_spotify_session_info(http_client, Duration::from_secs(5))
             .await?;
-    tracing::debug!("Spotify session info retrieved successfully.");
 
-    tracing::debug!("Requesting Spotify client token info...");
     let client_token_info = crate::audio::providers::get_spotify_client_token_info(
         http_client,
         &session_info.client_id,
         Duration::from_secs(5),
     )
     .await?;
-    tracing::debug!("Spotify client token info retrieved successfully.");
 
     let sp_dc = crate::audio::runtime::spotify_settings()
         .and_then(|config| config.sp_dc.clone())
         .filter(|cookie| !cookie.trim().is_empty())
         .ok_or_else(|| SerenyaError::Audio("Spotify sp_dc cookie is not configured.".to_owned()))?;
 
+    let mut response = None;
+    let mut attempts = 0;
+    while attempts < 3 {
+        attempts += 1;
+        match http_client
+            .post("https://api-partner.spotify.com/pathfinder/v1/query")
+            .json(gql_body)
+            .header("Authorization", format!("Bearer {}", session_info.access_token))
+            .header("Client-Token", &client_token_info.client_token)
+            .header("Spotify-App-Version", &client_token_info.client_version)
+            .header("Accept", "application/json")
+            .header("Accept-Language", "en")
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
+            .header("Referer", "https://open.spotify.com/")
+            .header("Origin", "https://open.spotify.com")
+            .header("Cookie", format!("sp_dc={}; sp_t={}", sp_dc, client_token_info.device_id))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    response = Some(resp);
+                    break;
+                } else if status.as_u16() == 429 {
+                    let retry_after = resp
+                        .headers()
+                        .get("Retry-After")
+                        .and_then(|h| h.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(2);
+                    tracing::warn!(
+                        "Spotify Partner API rate limited (429). Retrying after {} seconds...",
+                        retry_after
+                    );
+                    tokio::time::sleep(Duration::from_secs(retry_after)).await;
+                } else {
+                    tracing::warn!(
+                        "Spotify Partner API request failed with status: {} (attempt {}/3)",
+                        status,
+                        attempts
+                    );
+                    tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Spotify Partner API request failed: {} (attempt {}/3)", e, attempts);
+                tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
+            }
+        }
+    }
+
+    let response = response.ok_or_else(|| {
+        SerenyaError::Audio("Spotify Partner API request failed after 3 attempts.".to_owned())
+    })?;
+
+    let body = response.json::<serde_json::Value>().await.map_err(|e| {
+        SerenyaError::Audio(format!("Failed to parse Spotify Partner API JSON response: {e}"))
+    })?;
+
+    if let Some(errors) = body.get("errors").and_then(|e| e.as_array())
+        && !errors.is_empty()
+    {
+        let first_err = errors[0]
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown GraphQL error");
+        return Err(SerenyaError::Audio(format!(
+            "Spotify GraphQL error: {}",
+            first_err
+        )));
+    }
+
+    Ok(body)
+}
+
+async fn resolve_spotify_playlist_api(
+    playlist_id: &str,
+    limit: usize,
+    user_id: u64,
+    http_client: &reqwest::Client,
+) -> Result<Vec<Track>, SerenyaError> {
     let mut tracks = Vec::with_capacity(limit);
     let mut offset = 0;
     let mut total_count = None;
@@ -1315,84 +1396,7 @@ async fn resolve_spotify_playlist_api(
             }
         });
 
-        let mut response = None;
-        let mut attempts = 0;
-        while attempts < 3 {
-            attempts += 1;
-            match http_client
-                .post("https://api-partner.spotify.com/pathfinder/v1/query")
-                .json(&gql_body)
-                .header("Authorization", format!("Bearer {}", session_info.access_token))
-                .header("Client-Token", &client_token_info.client_token)
-                .header("Spotify-App-Version", &client_token_info.client_version)
-                .header("Accept", "application/json")
-                .header("Accept-Language", "en")
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
-                .header("Referer", "https://open.spotify.com/")
-                .header("Origin", "https://open.spotify.com")
-                .header("Cookie", format!("sp_dc={}; sp_t={}", sp_dc, client_token_info.device_id))
-                .send()
-                .await
-            {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status.is_success() {
-                        response = Some(resp);
-                        break;
-                    } else if status.as_u16() == 429 {
-                        let retry_after = resp
-                            .headers()
-                            .get("Retry-After")
-                            .and_then(|h| h.to_str().ok())
-                            .and_then(|s| s.parse::<u64>().ok())
-                            .unwrap_or(2);
-                        tracing::warn!(
-                            "Spotify Partner API rate limited (429). Retrying after {} seconds...",
-                            retry_after
-                        );
-                        tokio::time::sleep(Duration::from_secs(retry_after)).await;
-                    } else {
-                        tracing::warn!(
-                            "Spotify Partner API request failed with status: {} (attempt {}/3)",
-                            status,
-                            attempts
-                        );
-                        tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Spotify Partner API request failed: {} (attempt {}/3)", e, attempts);
-                    tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
-                }
-            }
-        }
-
-        let response = match response {
-            Some(resp) => resp,
-            None => {
-                return Err(SerenyaError::Audio(format!(
-                    "Failed to fetch Spotify playlist tracks chunk after 3 attempts (offset {})",
-                    offset
-                )));
-            }
-        };
-
-        let body: serde_json::Value = response.json().await.map_err(|e| {
-            SerenyaError::Audio(format!("Failed to parse Spotify Partner API JSON: {}", e))
-        })?;
-
-        if let Some(errors) = body.get("errors").and_then(|e| e.as_array())
-            && !errors.is_empty()
-        {
-            let first_err = errors[0]
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown GraphQL error");
-            return Err(SerenyaError::Audio(format!(
-                "Spotify GraphQL error: {}",
-                first_err
-            )));
-        }
+        let body = spotify_partner_post(http_client, &gql_body).await?;
 
         let playlist_v2 = body.pointer("/data/playlistV2").ok_or_else(|| {
             SerenyaError::Audio("Missing playlistV2 in Spotify GraphQL response".to_owned())
@@ -1577,26 +1581,6 @@ async fn resolve_spotify_album_api(
     user_id: u64,
     http_client: &reqwest::Client,
 ) -> Result<Vec<Track>, SerenyaError> {
-    tracing::debug!("Requesting Spotify session info for album resolution...");
-    let session_info =
-        crate::audio::providers::get_spotify_session_info(http_client, Duration::from_secs(5))
-            .await?;
-    tracing::debug!("Spotify session info retrieved successfully.");
-
-    tracing::debug!("Requesting Spotify client token info...");
-    let client_token_info = crate::audio::providers::get_spotify_client_token_info(
-        http_client,
-        &session_info.client_id,
-        Duration::from_secs(5),
-    )
-    .await?;
-    tracing::debug!("Spotify client token info retrieved successfully.");
-
-    let sp_dc = crate::audio::runtime::spotify_settings()
-        .and_then(|config| config.sp_dc.clone())
-        .filter(|cookie| !cookie.trim().is_empty())
-        .ok_or_else(|| SerenyaError::Audio("Spotify sp_dc cookie is not configured.".to_owned()))?;
-
     let mut tracks = Vec::with_capacity(limit);
     let mut offset = 0;
     let mut total_count = None;
@@ -1627,84 +1611,7 @@ async fn resolve_spotify_album_api(
             }
         });
 
-        let mut response = None;
-        let mut attempts = 0;
-        while attempts < 3 {
-            attempts += 1;
-            match http_client
-                .post("https://api-partner.spotify.com/pathfinder/v1/query")
-                .json(&gql_body)
-                .header("Authorization", format!("Bearer {}", session_info.access_token))
-                .header("Client-Token", &client_token_info.client_token)
-                .header("Spotify-App-Version", &client_token_info.client_version)
-                .header("Accept", "application/json")
-                .header("Accept-Language", "en")
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
-                .header("Referer", "https://open.spotify.com/")
-                .header("Origin", "https://open.spotify.com")
-                .header("Cookie", format!("sp_dc={}; sp_t={}", sp_dc, client_token_info.device_id))
-                .send()
-                .await
-            {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status.is_success() {
-                        response = Some(resp);
-                        break;
-                    } else if status.as_u16() == 429 {
-                        let retry_after = resp
-                            .headers()
-                            .get("Retry-After")
-                            .and_then(|h| h.to_str().ok())
-                            .and_then(|s| s.parse::<u64>().ok())
-                            .unwrap_or(2);
-                        tracing::warn!(
-                            "Spotify Partner API rate limited (429). Retrying after {} seconds...",
-                            retry_after
-                        );
-                        tokio::time::sleep(Duration::from_secs(retry_after)).await;
-                    } else {
-                        tracing::warn!(
-                            "Spotify Partner API request failed with status: {} (attempt {}/3)",
-                            status,
-                            attempts
-                        );
-                        tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Spotify Partner API request failed: {} (attempt {}/3)", e, attempts);
-                    tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
-                }
-            }
-        }
-
-        let response = match response {
-            Some(resp) => resp,
-            None => {
-                return Err(SerenyaError::Audio(format!(
-                    "Failed to fetch Spotify album tracks chunk after 3 attempts (offset {})",
-                    offset
-                )));
-            }
-        };
-
-        let body: serde_json::Value = response.json().await.map_err(|e| {
-            SerenyaError::Audio(format!("Failed to parse Spotify Partner API JSON: {}", e))
-        })?;
-
-        if let Some(errors) = body.get("errors").and_then(|e| e.as_array())
-            && !errors.is_empty()
-        {
-            let first_err = errors[0]
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown GraphQL error");
-            return Err(SerenyaError::Audio(format!(
-                "Spotify GraphQL error: {}",
-                first_err
-            )));
-        }
+        let body = spotify_partner_post(http_client, &gql_body).await?;
 
         let album_val = body
             .pointer("/data/albumUnion")
@@ -1886,26 +1793,6 @@ async fn resolve_spotify_artist_top_tracks_api(
     user_id: u64,
     http_client: &reqwest::Client,
 ) -> Result<Vec<Track>, SerenyaError> {
-    tracing::debug!("Requesting Spotify session info for artist top tracks resolution...");
-    let session_info =
-        crate::audio::providers::get_spotify_session_info(http_client, Duration::from_secs(5))
-            .await?;
-    tracing::debug!("Spotify session info retrieved successfully.");
-
-    tracing::debug!("Requesting Spotify client token info...");
-    let client_token_info = crate::audio::providers::get_spotify_client_token_info(
-        http_client,
-        &session_info.client_id,
-        Duration::from_secs(5),
-    )
-    .await?;
-    tracing::debug!("Spotify client token info retrieved successfully.");
-
-    let sp_dc = crate::audio::runtime::spotify_settings()
-        .and_then(|config| config.sp_dc.clone())
-        .filter(|cookie| !cookie.trim().is_empty())
-        .ok_or_else(|| SerenyaError::Audio("Spotify sp_dc cookie is not configured.".to_owned()))?;
-
     let gql_hash = "7f86ff63e38c24973a2842b672abe44c910c1973978dc8a4a0cb648edef34527";
     let gql_body = serde_json::json!({
         "operationName": "queryArtistOverview",
@@ -1922,83 +1809,7 @@ async fn resolve_spotify_artist_top_tracks_api(
         }
     });
 
-    let mut response = None;
-    let mut attempts = 0;
-    while attempts < 3 {
-        attempts += 1;
-        match http_client
-            .post("https://api-partner.spotify.com/pathfinder/v1/query")
-            .json(&gql_body)
-            .header("Authorization", format!("Bearer {}", session_info.access_token))
-            .header("Client-Token", &client_token_info.client_token)
-            .header("Spotify-App-Version", &client_token_info.client_version)
-            .header("Accept", "application/json")
-            .header("Accept-Language", "en")
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
-            .header("Referer", "https://open.spotify.com/")
-            .header("Origin", "https://open.spotify.com")
-            .header("Cookie", format!("sp_dc={}; sp_t={}", sp_dc, client_token_info.device_id))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                let status = resp.status();
-                if status.is_success() {
-                    response = Some(resp);
-                    break;
-                } else if status.as_u16() == 429 {
-                    let retry_after = resp
-                        .headers()
-                        .get("Retry-After")
-                        .and_then(|h| h.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(2);
-                    tracing::warn!(
-                        "Spotify Partner API rate limited (429). Retrying after {} seconds...",
-                        retry_after
-                    );
-                    tokio::time::sleep(Duration::from_secs(retry_after)).await;
-                } else {
-                    tracing::warn!(
-                        "Spotify Partner API request failed with status: {} (attempt {}/3)",
-                        status,
-                        attempts
-                    );
-                    tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Spotify Partner API request failed: {} (attempt {}/3)", e, attempts);
-                tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
-            }
-        }
-    }
-
-    let response = match response {
-        Some(resp) => resp,
-        None => {
-            return Err(SerenyaError::Audio(
-                "Failed to fetch Spotify artist overview after 3 attempts".to_owned(),
-            ));
-        }
-    };
-
-    let body: serde_json::Value = response.json().await.map_err(|e| {
-        SerenyaError::Audio(format!("Failed to parse Spotify Partner API JSON: {}", e))
-    })?;
-
-    if let Some(errors) = body.get("errors").and_then(|e| e.as_array())
-        && !errors.is_empty()
-    {
-        let first_err = errors[0]
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("Unknown GraphQL error");
-        return Err(SerenyaError::Audio(format!(
-            "Spotify GraphQL error: {}",
-            first_err
-        )));
-    }
+    let body = spotify_partner_post(http_client, &gql_body).await?;
 
     let artist_val = body
         .pointer("/data/artistUnion")
@@ -2136,26 +1947,6 @@ async fn resolve_spotify_track_api(
     track_id: &str,
     http_client: &reqwest::Client,
 ) -> Result<ExternalTrackMeta, SerenyaError> {
-    tracing::debug!("Requesting Spotify session info for track resolution...");
-    let session_info =
-        crate::audio::providers::get_spotify_session_info(http_client, Duration::from_secs(5))
-            .await?;
-    tracing::debug!("Spotify session info retrieved successfully.");
-
-    tracing::debug!("Requesting Spotify client token info...");
-    let client_token_info = crate::audio::providers::get_spotify_client_token_info(
-        http_client,
-        &session_info.client_id,
-        Duration::from_secs(5),
-    )
-    .await?;
-    tracing::debug!("Spotify client token info retrieved successfully.");
-
-    let sp_dc = crate::audio::runtime::spotify_settings()
-        .and_then(|config| config.sp_dc.clone())
-        .filter(|cookie| !cookie.trim().is_empty())
-        .ok_or_else(|| SerenyaError::Audio("Spotify sp_dc cookie is not configured.".to_owned()))?;
-
     let gql_hash = "612585ae06ba435ad26369870deaae23b5c8800a256cd8a57e08eddc25a37294";
     let gql_body = serde_json::json!({
         "operationName": "getTrack",
@@ -2170,83 +1961,7 @@ async fn resolve_spotify_track_api(
         }
     });
 
-    let mut response = None;
-    let mut attempts = 0;
-    while attempts < 3 {
-        attempts += 1;
-        match http_client
-            .post("https://api-partner.spotify.com/pathfinder/v1/query")
-            .json(&gql_body)
-            .header("Authorization", format!("Bearer {}", session_info.access_token))
-            .header("Client-Token", &client_token_info.client_token)
-            .header("Spotify-App-Version", &client_token_info.client_version)
-            .header("Accept", "application/json")
-            .header("Accept-Language", "en")
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
-            .header("Referer", "https://open.spotify.com/")
-            .header("Origin", "https://open.spotify.com")
-            .header("Cookie", format!("sp_dc={}; sp_t={}", sp_dc, client_token_info.device_id))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                let status = resp.status();
-                if status.is_success() {
-                    response = Some(resp);
-                    break;
-                } else if status.as_u16() == 429 {
-                    let retry_after = resp
-                        .headers()
-                        .get("Retry-After")
-                        .and_then(|h| h.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(2);
-                    tracing::warn!(
-                        "Spotify Partner API rate limited (429). Retrying after {} seconds...",
-                        retry_after
-                    );
-                    tokio::time::sleep(Duration::from_secs(retry_after)).await;
-                } else {
-                    tracing::warn!(
-                        "Spotify Partner API request failed with status: {} (attempt {}/3)",
-                        status,
-                        attempts
-                    );
-                    tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Spotify Partner API request failed: {} (attempt {}/3)", e, attempts);
-                tokio::time::sleep(Duration::from_millis(500 * attempts)).await;
-            }
-        }
-    }
-
-    let response = match response {
-        Some(resp) => resp,
-        None => {
-            return Err(SerenyaError::Audio(
-                "Failed to fetch Spotify track overview after 3 attempts".to_owned(),
-            ));
-        }
-    };
-
-    let body: serde_json::Value = response.json().await.map_err(|e| {
-        SerenyaError::Audio(format!("Failed to parse Spotify Partner API JSON: {}", e))
-    })?;
-
-    if let Some(errors) = body.get("errors").and_then(|e| e.as_array())
-        && !errors.is_empty()
-    {
-        let first_err = errors[0]
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("Unknown GraphQL error");
-        return Err(SerenyaError::Audio(format!(
-            "Spotify GraphQL error: {}",
-            first_err
-        )));
-    }
+    let body = spotify_partner_post(http_client, &gql_body).await?;
 
     let track_val = body
         .pointer("/data/trackUnion")
