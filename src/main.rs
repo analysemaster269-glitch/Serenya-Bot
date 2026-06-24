@@ -267,6 +267,9 @@ async fn shutdown(
     }
 
     info!("Serenya shut down gracefully");
+
+    // Flush webhook logs before exiting
+    crate::logging::webhook::shutdown().await;
 }
 
 /// Appends the `bin/` subdirectory (relative to CWD) to the process PATH.

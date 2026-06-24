@@ -28,6 +28,46 @@ impl Visit for MessageVisitor {
     }
 }
 
+use std::sync::Mutex;
+
+static SHUTDOWN_TX: Mutex<Option<tokio::sync::oneshot::Sender<tokio::sync::oneshot::Sender<()>>>> = Mutex::new(None);
+
+pub async fn shutdown() {
+    if let Some(shutdown_tx) = SHUTDOWN_TX.lock().ok().and_then(|mut guard| guard.take()) {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        if shutdown_tx.send(ack_tx).is_ok() {
+            // Wait up to 5 seconds for final logs to flush
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), ack_rx).await;
+        }
+    }
+}
+
+fn get_emoji_and_color(level: Level, message: &str) -> (&'static str, u32) {
+    let msg_lower = message.to_lowercase();
+    match level {
+        Level::ERROR => ("🔴", 0xED4245),
+        Level::WARN => ("🟡", 0xFEE75C),
+        Level::INFO => {
+            if msg_lower.contains("starting")
+                || msg_lower.contains("ready")
+                || msg_lower.contains("register")
+                || msg_lower.contains("loaded")
+            {
+                ("🟢", 0x2ECC71) // Green for start/init
+            } else if msg_lower.contains("shutdown")
+                || msg_lower.contains("shut down")
+                || msg_lower.contains("signal received")
+            {
+                ("🟠", 0xE67E22) // Orange for shutdown
+            } else {
+                ("🔵", 0x3498DB) // Blue for normal info
+            }
+        }
+        Level::DEBUG => ("⚙️", 0x979C9F),
+        Level::TRACE => ("🧬", 0x979C9F),
+    }
+}
+
 impl WebhookLayer {
     /// Spawns a background flusher task and returns the layer.
     pub fn new(
@@ -37,8 +77,15 @@ impl WebhookLayer {
         plain_text: bool,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+        if let Ok(mut guard) = SHUTDOWN_TX.lock() {
+            *guard = Some(shutdown_tx);
+        }
+
         tokio::spawn(flush_loop(
             rx,
+            shutdown_rx,
             webhook_url,
             http_client,
             min_level,
@@ -71,6 +118,7 @@ impl<S: Subscriber> Layer<S> for WebhookLayer {
 /// Background task that batches log entries and sends them to Discord.
 async fn flush_loop(
     mut rx: mpsc::UnboundedReceiver<LogEntry>,
+    mut shutdown_rx: tokio::sync::oneshot::Receiver<tokio::sync::oneshot::Sender<()>>,
     webhook_url: String,
     http_client: reqwest::Client,
     min_level: Level,
@@ -79,33 +127,48 @@ async fn flush_loop(
     let mut buffer: Vec<LogEntry> = Vec::new();
 
     loop {
-        let recv = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await;
+        let sleep_fut = tokio::time::sleep(std::time::Duration::from_secs(2));
+        tokio::pin!(sleep_fut);
 
-        match recv {
-            Ok(Some(entry)) => {
-                // Filter by min level
-                if entry.level <= min_level {
-                    buffer.push(entry);
-                    if buffer.len() < 10 {
-                        continue;
+        tokio::select! {
+            entry_opt = rx.recv() => {
+                match entry_opt {
+                    Some(entry) => {
+                        if entry.level <= min_level {
+                            buffer.push(entry);
+                            if buffer.len() >= 10 {
+                                send_batch(&http_client, &webhook_url, &buffer, plain_text).await;
+                                buffer.clear();
+                            }
+                        }
+                    }
+                    None => {
+                        if !buffer.is_empty() {
+                            send_batch(&http_client, &webhook_url, &buffer, plain_text).await;
+                        }
+                        break;
                     }
                 }
             }
-            Ok(None) => {
-                // Channel closed, flush remaining and exit
-                if !buffer.is_empty() {
-                    send_batch(&http_client, &webhook_url, &buffer, plain_text).await;
+            ack_sender_res = &mut shutdown_rx => {
+                if let Ok(ack_sender) = ack_sender_res {
+                    rx.close();
+                    while let Some(entry) = rx.recv().await {
+                        if entry.level <= min_level {
+                            buffer.push(entry);
+                        }
+                    }
+                    if !buffer.is_empty() {
+                        send_batch(&http_client, &webhook_url, &buffer, plain_text).await;
+                    }
+                    let _ = ack_sender.send(());
                 }
                 break;
             }
-            Err(_) => {
-                // Timeout — flush whatever we have
+            _ = &mut sleep_fut, if !buffer.is_empty() => {
+                send_batch(&http_client, &webhook_url, &buffer, plain_text).await;
+                buffer.clear();
             }
-        }
-
-        if !buffer.is_empty() {
-            send_batch(&http_client, &webhook_url, &buffer, plain_text).await;
-            buffer.clear();
         }
     }
 }
@@ -126,13 +189,7 @@ async fn send_batch(
                 .target
                 .strip_prefix("serenya::")
                 .unwrap_or(&entry.target);
-            let emoji = match entry.level {
-                Level::ERROR => "🔴",
-                Level::WARN => "🟡",
-                Level::INFO => "🔵",
-                Level::DEBUG => "⚙️",
-                Level::TRACE => "🧬",
-            };
+            let (emoji, _) = get_emoji_and_color(entry.level, &entry.message);
             let log_line = format!(
                 "{} **[{}]** `{}`: {}\n",
                 emoji, entry.level, target_clean, msg_truncated
@@ -156,17 +213,12 @@ async fn send_batch(
     } else {
         let mut embeds = Vec::new();
         for entry in entries {
-            let color = match entry.level {
-                Level::ERROR => 0xED4245, // red
-                Level::WARN => 0xFEE75C,  // yellow
-                Level::INFO => 0x3498DB,  // blue
-                _ => 0x979C9F,            // grey
-            };
+            let (emoji, color) = get_emoji_and_color(entry.level, &entry.message);
             let target_clean = entry
                 .target
                 .strip_prefix("serenya::")
                 .unwrap_or(&entry.target);
-            let title = format!("{} — {}", entry.level, target_clean);
+            let title = format!("{} {} — {}", emoji, entry.level, target_clean);
             let description = crate::utils::truncate_chars(&entry.message, 1997);
             // Redact secrets in the description!
             let description_redacted = crate::logging::redact_secrets(&description);
