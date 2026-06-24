@@ -155,6 +155,13 @@ Use a secondary account where possible. This cookie grants access to your Spotif
 
 ## Running From Source
 
+> [!WARNING]
+> Pre-built release binaries are compiled with `-C target-cpu=native` to maximize performance (accelerating audio decoding and JS execution).
+> If a downloaded release binary crashes or fails to run on your system (e.g., triggering `Illegal Instruction` or `core dumped`), please clone the repository and build the binary yourself on the target machine:
+> ```bash
+> cargo build --release
+> ```
+
 ```powershell
 cargo run --release
 ```
