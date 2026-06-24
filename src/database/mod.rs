@@ -13,11 +13,18 @@ use tokio_util::sync::CancellationToken;
 use crate::utils::error::SerenyaError;
 use models::{Database, GuildSettings, PlaylistTrack, UserSettings};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CachedPrefix {
+    Default,
+    Custom(Arc<str>),
+}
+
 #[derive(Clone)]
 pub struct DatabaseManager {
     data: Arc<RwLock<Arc<Database>>>,
     path: PathBuf,
     is_dirty: Arc<std::sync::atomic::AtomicBool>,
+    prefix_cache: Arc<dashmap::DashMap<u64, CachedPrefix>>,
 }
 
 impl DatabaseManager {
@@ -40,10 +47,22 @@ impl DatabaseManager {
         };
 
         tracing::info!(path = %path.display(), "database loaded");
+        let prefix_cache = dashmap::DashMap::new();
+        for (guild_id_str, settings) in &db.guild_settings {
+            if let Ok(guild_id) = guild_id_str.parse::<u64>() {
+                if let Some(ref prefix) = settings.prefix {
+                    prefix_cache.insert(guild_id, CachedPrefix::Custom(Arc::from(prefix.as_str())));
+                } else {
+                    prefix_cache.insert(guild_id, CachedPrefix::Default);
+                }
+            }
+        }
+
         Ok(Self {
             data: Arc::new(RwLock::new(Arc::new(db))),
             path,
             is_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            prefix_cache: Arc::new(prefix_cache),
         })
     }
 
@@ -110,6 +129,16 @@ impl DatabaseManager {
         Ok(())
     }
 
+    pub fn get_guild_prefix(&self, guild_id: u64, default_prefix: &str) -> Arc<str> {
+        if let Some(cached) = self.prefix_cache.get(&guild_id) {
+            match cached.value() {
+                CachedPrefix::Default => return Arc::from(default_prefix),
+                CachedPrefix::Custom(prefix) => return prefix.clone(),
+            }
+        }
+        Arc::from(default_prefix)
+    }
+
     pub async fn get_guild_settings(&self, guild_id: u64) -> GuildSettings {
         let data = self.data.read().await;
         let key = guild_id.to_string();
@@ -119,9 +148,39 @@ impl DatabaseManager {
     pub async fn update_guild_settings(&self, guild_id: u64, settings: GuildSettings) {
         let mut data_guard = self.data.write().await;
         let data = Arc::make_mut(&mut *data_guard);
+        let prefix_opt = settings.prefix.clone();
         data.guild_settings.insert(guild_id.to_string(), settings);
+        
+        if let Some(ref prefix) = prefix_opt {
+            self.prefix_cache.insert(guild_id, CachedPrefix::Custom(Arc::from(prefix.as_str())));
+        } else {
+            self.prefix_cache.insert(guild_id, CachedPrefix::Default);
+        }
+
         self.is_dirty
             .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub async fn update_guild_settings_mut<F, R>(&self, guild_id: u64, f: F) -> R
+    where
+        F: FnOnce(&mut GuildSettings) -> R,
+    {
+        let mut data_guard = self.data.write().await;
+        let data = Arc::make_mut(&mut *data_guard);
+        let key = guild_id.to_string();
+        let settings = data.guild_settings.entry(key).or_default();
+        
+        let res = f(settings);
+        
+        if let Some(ref prefix) = settings.prefix {
+            self.prefix_cache.insert(guild_id, CachedPrefix::Custom(Arc::from(prefix.as_str())));
+        } else {
+            self.prefix_cache.insert(guild_id, CachedPrefix::Default);
+        }
+        
+        self.is_dirty
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        res
     }
 
     pub async fn get_user_settings(&self, user_id: u64) -> UserSettings {
@@ -294,16 +353,15 @@ impl DatabaseManager {
             .get_mut(&key)
             .ok_or_else(|| SerenyaError::NotFound("no playlists found for user".into()))?;
 
-        let playlist = playlists
-            .remove(old_name)
-            .ok_or_else(|| SerenyaError::NotFound(format!("playlist '{old_name}' not found")))?;
-
         if playlists.contains_key(new_name) {
-            playlists.insert(old_name.to_owned(), playlist);
             return Err(SerenyaError::Database(format!(
                 "playlist '{new_name}' already exists"
             )));
         }
+
+        let playlist = playlists
+            .remove(old_name)
+            .ok_or_else(|| SerenyaError::NotFound(format!("playlist '{old_name}' not found")))?;
 
         playlists.insert(new_name.to_owned(), playlist);
         self.is_dirty
@@ -317,6 +375,15 @@ impl DatabaseManager {
         let key = guild_id.to_string();
         let settings = data.guild_settings.entry(key).or_default();
         settings.total_songs_played += 1;
+
+        if !self.prefix_cache.contains_key(&guild_id) {
+            if let Some(ref p) = settings.prefix {
+                self.prefix_cache.insert(guild_id, CachedPrefix::Custom(Arc::from(p.as_str())));
+            } else {
+                self.prefix_cache.insert(guild_id, CachedPrefix::Default);
+            }
+        }
+
         self.is_dirty
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
