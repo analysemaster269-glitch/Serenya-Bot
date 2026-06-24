@@ -37,8 +37,8 @@ impl Data {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
     configure_path();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tokio::runtime::Runtime::new().unwrap().block_on(run())
 }
 
@@ -91,11 +91,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     Box::pin(async move {
                         let default_prefix = ctx.data.config().bot.prefix.clone();
                         if let Some(guild_id) = ctx.guild_id {
-                            let db = &ctx.data.database;
-                            let settings = db.get_guild_settings(guild_id.get()).await;
-                            if let Some(ref custom_prefix) = settings.prefix {
-                                return Ok(Some(custom_prefix.clone()));
-                            }
+                            let prefix = ctx.data.database.get_guild_prefix(guild_id.get(), &default_prefix);
+                            return Ok(Some(prefix.to_string()));
                         }
                         Ok(Some(default_prefix))
                     })
@@ -142,13 +139,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         serenity::FullEvent::Message { new_message } if !new_message.author.bot => {
                             let content = &new_message.content;
-                            let db = std::sync::Arc::clone(&data.database);
+                            let default_prefix = data.config().bot.prefix.as_str();
                             let prefix = if let Some(guild_id) = new_message.guild_id {
-                                db.get_guild_settings(guild_id.get()).await.prefix
+                                data.database.get_guild_prefix(guild_id.get(), default_prefix)
                             } else {
-                                None
-                            }
-                            .unwrap_or_else(|| data.config().bot.prefix.clone());
+                                std::sync::Arc::from(default_prefix)
+                            };
 
                             if content.starts_with(&prefix) {
                                 let content_lower = content.to_lowercase();
@@ -468,23 +464,29 @@ async fn handle_voice_state_update(
         None => return Ok(()),
     };
 
-    let mut player = player_lock.write().await;
-
-    // 2. We track empty_since regardless of playback status,
-    // so we don't return early here anymore.
+    // Read necessary info first under read lock
+    let (bot_channel_id, queue_is_empty, playback_status, has_empty_since) = {
+        let player = player_lock.read().await;
+        (
+            player.voice_channel,
+            player.queue.is_empty(),
+            player.playback_status,
+            player.empty_since.is_some(),
+        )
+    };
 
     // 3. Get the bot's current voice channel
-    let bot_channel_id = match player.voice_channel {
+    let bot_channel_id = match bot_channel_id {
         Some(c) => c,
         None => {
             // If the bot has left the voice channel and queue is empty, remove player memory
-            if player.queue.is_empty()
-                && player.playback_status == crate::core::PlaybackStatus::Idle
-            {
-                drop(player);
+            if queue_is_empty && playback_status == crate::core::PlaybackStatus::Idle {
                 data.guild_players.remove(&guild_id);
                 crate::audio::runtime::cleanup_guild(guild_id.get());
-                tracing::info!(guild_id = %guild_id, "Bot is not in voice and queue is empty, removed GuildPlayer");
+                tracing::info!(
+                    guild_id = %guild_id,
+                    "Bot is not in voice and queue is empty, removed GuildPlayer"
+                );
             }
             return Ok(());
         }
@@ -493,7 +495,7 @@ async fn handle_voice_state_update(
     // 4. Get bot user ID
     let bot_id = ctx.cache.current_user().id;
 
-    // 5. Count human members in the voice channel
+    // 5. Count human members in the voice channel (without holding lock)
     let mut human_count = 0;
     if let Some(guild) = ctx.cache.guild(guild_id) {
         for state in guild.voice_states.values() {
@@ -513,8 +515,9 @@ async fn handle_voice_state_update(
         }
     }
 
-    // 6. Update empty_since and auto-pause if playing
+    // 6. Update empty_since and auto-pause if playing (acquire write lock ONLY when needed)
     if human_count == 0 {
+        let mut player = player_lock.write().await;
         if player.empty_since.is_none() {
             player.empty_since = Some(std::time::Instant::now());
         }
@@ -548,7 +551,10 @@ async fn handle_voice_state_update(
             }
         }
     } else {
-        player.empty_since = None;
+        if has_empty_since {
+            let mut player = player_lock.write().await;
+            player.empty_since = None;
+        }
     }
 
     Ok(())
