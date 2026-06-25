@@ -1,4 +1,4 @@
-use boa_engine::{Context, Source};
+use rquickjs::{Context, Runtime, Function};
 use once_cell::sync::Lazy;
 use rand::Rng;
 use regex::Regex;
@@ -50,23 +50,24 @@ pub fn parse_video_formats(
             formats.into_iter().chain(adaptive_formats).collect();
 
         let mut n_transform_cache: HashMap<String, String> = HashMap::new();
-        let mut cipher_cache: Option<(String, Context)> = None;
+        let runtime = rquickjs::Runtime::new().ok();
+        let mut cipher_cache: Option<(String, rquickjs::Context)> = None;
 
-        let well_formated_formats: Vec<VideoFormat> = formats
-            .iter_mut()
-            .filter(|format| format.mime_type.is_some())
-            .map(|format| {
+        let mut well_formated_formats: Vec<VideoFormat> = Vec::new();
+        for mut format in formats {
+            if format.mime_type.is_some() {
                 let mut video_format = VideoFormat::from(format.clone());
                 video_format.url = set_download_url(
-                    format,
+                    &mut format,
                     format_functions.clone(),
                     &mut n_transform_cache,
                     &mut cipher_cache,
+                    runtime.as_ref(),
                 );
                 add_format_meta(&mut video_format);
-                video_format
-            })
-            .collect();
+                well_formated_formats.push(video_format);
+            }
+        }
 
         return Some(well_formated_formats);
     }
@@ -356,7 +357,8 @@ pub fn set_download_url(
     format: &mut StreamingDataFormat,
     functions: Vec<(String, String)>,
     n_transform_cache: &mut HashMap<String, String>,
-    cipher_cache: &mut Option<(String, Context)>,
+    cipher_cache: &mut Option<(String, rquickjs::Context)>,
+    runtime: Option<&rquickjs::Runtime>,
 ) -> String {
     #[derive(Debug, Deserialize, PartialEq, Serialize)]
     struct Query {
@@ -385,7 +387,7 @@ pub fn set_download_url(
             .unwrap_or(format.cipher.clone().unwrap_or_default());
 
         format.url = Some(ncode(
-            decipher(&url, decipher_script_string, cipher_cache).as_str(),
+            decipher(&url, decipher_script_string, cipher_cache, runtime).as_str(),
             n_transform_script_string,
             n_transform_cache,
         ));
@@ -398,7 +400,8 @@ pub fn set_download_url(
 fn decipher(
     url: &str,
     decipher_script_string: (&str, &str),
-    cipher_cache: &mut Option<(String, Context)>,
+    cipher_cache: &mut Option<(String, rquickjs::Context)>,
+    runtime: Option<&rquickjs::Runtime>,
 ) -> String {
     let args: serde_json::value::Map<String, serde_json::Value> = {
         #[cfg(feature = "performance_analysis")]
@@ -417,42 +420,39 @@ fn decipher(
         return get_url_string();
     }
 
+    let Some(rt) = runtime else {
+        return get_url_string();
+    };
+
     let context = match cipher_cache {
         Some((cache_key, context)) if cache_key == decipher_script_string.1 => context,
         _ => {
             #[cfg(feature = "performance_analysis")]
             let _guard = flame::start_guard("build engine");
-            let mut context = Context::default();
-            if context
-                .eval(Source::from_bytes(decipher_script_string.1))
-                .is_err()
-            {
+            let context = match rquickjs::Context::full(rt) {
+                Ok(ctx) => ctx,
+                Err(_) => return get_url_string(),
+            };
+            let eval_res = context.with(|ctx| {
+                ctx.eval::<(), _>(decipher_script_string.1)
+            });
+            if eval_res.is_err() {
                 return get_url_string();
             }
-            *cipher_cache = Some((decipher_script_string.1.to_string(), context));
-            &mut cipher_cache.as_mut().unwrap().1
+            *cipher_cache = Some((decipher_script_string.1.to_string(), context.clone()));
+            &cipher_cache.as_ref().unwrap().1
         }
     };
 
-    let result = {
-        #[cfg(feature = "performance_analysis")]
-        let _guard = flame::start_guard("execute engine");
-        context.eval(Source::from_bytes(&format!(
-            r#"{func_name}("{args}")"#,
-            func_name = decipher_script_string.0,
-            args = args
-                .get("s")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-        )))
-    };
+    let result = context.with(|ctx| -> Option<String> {
+        let func: rquickjs::Function = ctx.globals().get(decipher_script_string.0).ok()?;
+        let s_val = args.get("s").and_then(serde_json::Value::as_str).unwrap_or("");
+        func.call((s_val,)).ok()
+    });
 
     let result = match result {
-        Ok(res) => res
-            .as_string()
-            .and_then(|s| s.to_std_string().ok())
-            .unwrap_or_else(get_url_string),
-        Err(_) => return get_url_string(),
+        Some(res) => res,
+        None => return get_url_string(),
     };
 
     let mut return_url = match args
@@ -506,43 +506,22 @@ fn ncode(
         return update_url_with_n(url, result);
     }
 
-    #[cfg_attr(feature = "performance_analysis", flamer::flame)]
-    fn create_transform_script(script: &str) -> Option<Context> {
-        let mut context = Context::default();
-        context.eval(Source::from_bytes(script)).ok()?;
-        Some(context)
-    }
-
-    #[cfg_attr(feature = "performance_analysis", flamer::flame)]
-    fn execute_transform_script(
-        context: &mut Context,
-        func_name: &str,
-        n_transform_value: &str,
-    ) -> Option<String> {
-        context
-            .eval(Source::from_bytes(&format!(
-                r#"{func_name}("{n_transform_value}")"#,
-                func_name = func_name,
-                n_transform_value = n_transform_value
-            )))
-            .ok()
-            .and_then(|result| {
-                result
-                    .as_string()
-                    .map(|js_str| js_str.to_std_string().unwrap_or_default())
-            })
-    }
-
-    let mut context = match create_transform_script(n_transform_script_string.1) {
-        Some(res) => res,
-        None => return url.to_string(),
+    let runtime = match rquickjs::Runtime::new() {
+        Ok(rt) => rt,
+        Err(_) => return url.to_string(),
+    };
+    let context = match rquickjs::Context::full(&runtime) {
+        Ok(ctx) => ctx,
+        Err(_) => return url.to_string(),
     };
 
-    let result = match execute_transform_script(
-        &mut context,
-        n_transform_script_string.0,
-        n_transform_value,
-    ) {
+    let result = context.with(|ctx| -> Option<String> {
+        ctx.eval::<(), _>(n_transform_script_string.1).ok()?;
+        let func: rquickjs::Function = ctx.globals().get(n_transform_script_string.0).ok()?;
+        func.call((n_transform_value,)).ok()
+    });
+
+    let result = match result {
         Some(res) => res,
         None => return url.to_string(),
     };

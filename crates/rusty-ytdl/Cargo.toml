@@ -45,7 +45,7 @@ async-trait = { workspace = true }
 aes = "0.8.4"
 cbc = { version = "0.1.2", features = ["std"] }
 hex = "0.4.3"
-boa_engine = { workspace = true }
+rquickjs = { workspace = true }
 mime = { workspace = true }
 bytes = "1.7.1"
 flame = { version = "0.2.2", optional = true }

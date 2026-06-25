@@ -15,7 +15,7 @@ tokio = { workspace = true }
 mime = { workspace = true }
 moka = { workspace = true }
 sha1 = { workspace = true }
-boa_engine = { workspace = true }
+rquickjs = { workspace = true }
 url = { workspace = true }
 regex = { workspace = true }
 tracing = { workspace = true }

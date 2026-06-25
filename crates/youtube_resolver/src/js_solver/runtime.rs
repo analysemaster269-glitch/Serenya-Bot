@@ -1,5 +1,5 @@
 use super::cache::{N_CACHE, get_or_fetch_player_functions, sha1_hash};
-use boa_engine::{Context, Source};
+use rquickjs::{Context, Runtime, Function};
 
 pub async fn solve_signature(decipher_js: &str, encrypted_sig: &str) -> Result<String, String> {
     if decipher_js.is_empty() {
@@ -121,25 +121,21 @@ async fn run_js_function(
     label: String,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        use std::cell::RefCell;
-        thread_local! {
-            static JS_CTX: RefCell<Context> = RefCell::new(Context::default());
-        }
-        JS_CTX.with(|ctx| {
-            let mut context = ctx.borrow_mut();
-            context
-                .eval(Source::from_bytes(js_source.as_bytes()))
+        let runtime = Runtime::new()
+            .map_err(|e| format!("Failed to create QuickJS runtime: {e}"))?;
+        let context = Context::full(&runtime)
+            .map_err(|e| format!("Failed to create QuickJS context: {e}"))?;
+        context.with(|ctx| {
+            ctx.eval::<(), _>(js_source.as_bytes())
                 .map_err(|e| format!("JS evaluation error during {label} setup: {e}"))?;
             let func_name = js_function_name(&js_source)
                 .ok_or_else(|| format!("Could not determine {label} function name"))?;
-            let js_call = format!("{func_name}(\"{input}\")");
-            let result = context
-                .eval(Source::from_bytes(js_call.as_bytes()))
+            let func: Function = ctx.globals()
+                .get(func_name)
+                .map_err(|e| format!("Could not find function {func_name} in globals: {e}"))?;
+            let result: String = func.call((input.as_str(),))
                 .map_err(|e| format!("JS execution error during {label} call: {e}"))?;
-            result
-                .as_string()
-                .and_then(|js_str| js_str.to_std_string().ok())
-                .ok_or_else(|| format!("{label} function returned non-string value"))
+            Ok(result)
         })
     })
     .await

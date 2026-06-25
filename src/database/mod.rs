@@ -73,7 +73,7 @@ impl DatabaseManager {
         };
 
         let yaml = tokio::task::spawn_blocking(move || {
-            serde_saphyr::to_string(&db_clone)
+            serde_saphyr::to_string(&*db_clone)
                 .map_err(|e| SerenyaError::Database(format!("serialization failed: {e}")))
         })
         .await
