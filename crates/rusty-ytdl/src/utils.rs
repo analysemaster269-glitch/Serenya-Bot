@@ -46,7 +46,7 @@ pub fn parse_video_formats(
         let formats = streaming_data.formats.clone().unwrap_or_default();
         let adaptive_formats = streaming_data.adaptive_formats.clone().unwrap_or_default();
 
-        let mut formats: Vec<StreamingDataFormat> =
+        let formats: Vec<StreamingDataFormat> =
             formats.into_iter().chain(adaptive_formats).collect();
 
         let mut n_transform_cache: HashMap<String, String> = HashMap::new();
