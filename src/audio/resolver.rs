@@ -4,7 +4,7 @@ use crate::audio::providers::{
 };
 use crate::audio::ranking::{
     TrackCandidate, adjust_single_word_score, contains_unrequested_variant,
-    jaro_winkler_similarity, score_candidates,
+    jaro_winkler_similarity, score_candidates, MetadataConfidence, has_critical_risks,
 };
 use crate::core::{SourceType, Track};
 use crate::database::DatabaseManager;
@@ -313,6 +313,7 @@ fn score_provider_candidates(
     expected_title: &str,
     expected_artist: Option<&str>,
     expected_duration: Option<Duration>,
+    confidence: MetadataConfidence,
 ) -> Vec<(TrackCandidate, f64)> {
     let mut scored = score_candidates(
         candidates,
@@ -320,6 +321,7 @@ fn score_provider_candidates(
         expected_title,
         expected_artist,
         expected_duration,
+        confidence,
     );
 
     for (candidate, score) in &mut scored {
@@ -365,6 +367,7 @@ async fn perform_parallel_search(
         expected_artist,
         expected_duration,
         http_client,
+        MetadataConfidence::Trusted,
     )
     .await?;
 
@@ -392,6 +395,7 @@ async fn collect_search_results(
             None,
             None,
             http_client,
+            MetadataConfidence::Untrusted,
         )
     );
 
@@ -447,6 +451,7 @@ async fn run_provider_batch(
     expected_artist: Option<&str>,
     expected_duration: Option<Duration>,
     http_client: &reqwest::Client,
+    confidence: MetadataConfidence,
 ) -> Result<Vec<(TrackCandidate, f64)>, SerenyaError> {
     let settings = crate::audio::runtime::settings();
     let global_timeout =
@@ -564,6 +569,7 @@ async fn run_provider_batch(
                 expected_title,
                 expected_artist,
                 expected_duration,
+                confidence,
             );
 
             if let Some((candidate, top_score)) = scored.first()
@@ -789,6 +795,20 @@ pub async fn resolve_input(
             }
             Ok(res)
         } else if youtube_provider.supports(query_trimmed) {
+            if rusty_ytdl::search::Playlist::is_playlist(query_trimmed) {
+                let limit = crate::audio::runtime::max_playlist_import();
+                match resolve_youtube_playlist(query_trimmed, limit, user_id, http_client).await {
+                    Ok(tracks) => return Ok(ResolvedInput::Playlist(tracks)),
+                    Err(e) => {
+                        let has_video_context = query_trimmed.contains("watch?v=") || query_trimmed.contains("youtu.be/");
+                        if has_video_context {
+                            tracing::warn!("Failed to resolve YouTube playlist, falling back to single track loader: {:?}", e);
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
             let mut tracks = youtube_provider
                 .load(query_trimmed, user_id, http_client)
                 .await?;
@@ -962,9 +982,34 @@ fn evaluate_confidence_and_respond(
         .as_deref()
         .map(|title| format!("{original_query} {title}"))
         .unwrap_or_else(|| original_query.to_owned());
-    let variant_conflict = contains_unrequested_variant(&top_cand.title, &variant_context);
+    
+    let has_critical = has_critical_risks(
+        top_cand,
+        original_query,
+        forced_title.as_deref().unwrap_or(original_query),
+        None,
+        MetadataConfidence::Trusted,
+    );
 
-    let low_confidence = *top_score < settings.auto_pick_threshold || variant_conflict;
+    let variant_conflict = contains_unrequested_variant(&top_cand.title, &variant_context) || has_critical;
+
+    let mut low_confidence = *top_score < settings.auto_pick_threshold || variant_conflict;
+
+    if !low_confidence && scored.len() > 1 {
+        let second_score = scored[1].1;
+        let margin = top_score - second_score;
+        let required_margin = if *top_score >= 0.96 { 0.05 } else { 0.08 };
+        if margin < required_margin {
+            tracing::info!(
+                top_score = %top_score,
+                second_score = %second_score,
+                margin = %margin,
+                required_margin = %required_margin,
+                "Ambiguous match, presenting select menu options"
+            );
+            low_confidence = true;
+        }
+    }
 
     if low_confidence {
         tracing::info!(
@@ -2137,9 +2182,291 @@ pub async fn resolve_ytsearch_track(
     }
 }
 
+fn recursive_find_tracks(
+    value: &serde_json::Value,
+    tracks: &mut Vec<Track>,
+    seen_ids: &mut std::collections::HashSet<String>,
+    limit: usize,
+    user_id: u64,
+    provider_name: &str,
+) {
+    if tracks.len() >= limit {
+        return;
+    }
+
+    if let Some(obj) = value.as_object() {
+        if let Some(lockup) = obj.get("lockupViewModel") {
+            let title = lockup["metadata"]["lockupMetadataViewModel"]["title"]["content"]
+                .as_str()
+                .unwrap_or("Unknown");
+            let vid = lockup["contentId"]
+                .as_str()
+                .or_else(|| lockup["videoCommand"]["watchEndpoint"]["videoId"].as_str())
+                .unwrap_or_default();
+
+            if !vid.is_empty() && seen_ids.insert(vid.to_string()) {
+                tracks.push(Track {
+                    title: title.to_string(),
+                    url: format!("https://www.youtube.com/watch?v={}", vid),
+                    duration: None,
+                    requester_id: serenity::UserId::new(user_id),
+                    requester_name: None,
+                    source_type: SourceType::Playlist,
+                    resolved_url: None,
+                    thumbnail: None,
+                    source_provider: provider_name.to_owned(),
+                });
+            }
+        } else if let Some(video) = obj.get("playlistVideoRenderer") {
+            let title = video["title"]["runs"][0]["text"]
+                .as_str()
+                .or_else(|| video["title"]["simpleText"].as_str())
+                .unwrap_or("Unknown");
+            let vid = video["videoId"].as_str().unwrap_or_default();
+
+            if !vid.is_empty() && seen_ids.insert(vid.to_string()) {
+                let duration_str = video["lengthText"]["simpleText"].as_str();
+                let duration = duration_str.and_then(|s| {
+                    let parts: Vec<&str> = s.split(':').collect();
+                    let mut secs = 0u64;
+                    if parts.len() == 2 {
+                        let mins = parts[0].parse::<u64>().ok()?;
+                        let s = parts[1].parse::<u64>().ok()?;
+                        secs = mins * 60 + s;
+                    } else if parts.len() == 3 {
+                        let hrs = parts[0].parse::<u64>().ok()?;
+                        let mins = parts[1].parse::<u64>().ok()?;
+                        let s = parts[2].parse::<u64>().ok()?;
+                        secs = hrs * 3600 + mins * 60 + s;
+                    }
+                    Some(Duration::from_secs(secs))
+                });
+
+                tracks.push(Track {
+                    title: title.to_string(),
+                    url: format!("https://www.youtube.com/watch?v={}", vid),
+                    duration,
+                    requester_id: serenity::UserId::new(user_id),
+                    requester_name: None,
+                    source_type: SourceType::Playlist,
+                    resolved_url: None,
+                    thumbnail: video["thumbnail"]["thumbnails"]
+                        .as_array()
+                        .and_then(|arr| arr.first())
+                        .and_then(|t| t["url"].as_str())
+                        .map(|url| std::sync::Arc::from(url)),
+                    source_provider: provider_name.to_owned(),
+                });
+            }
+        } else {
+            for (_, val) in obj {
+                recursive_find_tracks(val, tracks, seen_ids, limit, user_id, provider_name);
+            }
+        }
+    } else if let Some(arr) = value.as_array() {
+        for val in arr {
+            recursive_find_tracks(val, tracks, seen_ids, limit, user_id, provider_name);
+        }
+    }
+}
+
+async fn resolve_youtube_playlist(
+    url: &str,
+    limit: usize,
+    user_id: u64,
+    http_client: &reqwest::Client,
+) -> Result<Vec<Track>, SerenyaError> {
+    let mut normalized_url = url.to_owned();
+    if normalized_url.contains("music.youtube.com") {
+        normalized_url = normalized_url.replace("music.youtube.com", "www.youtube.com");
+    }
+
+    let playlist_url = rusty_ytdl::search::Playlist::get_playlist_url(&normalized_url)
+        .ok_or_else(|| SerenyaError::Audio("Invalid YouTube playlist URL".into()))?;
+
+    let provider_name = if url.contains("music.youtube.com") {
+        "YouTube Music".to_owned()
+    } else {
+        "YouTube".to_owned()
+    };
+
+    let mut tracks = Vec::new();
+    let mut is_valid_playlist = false;
+
+    let is_album = url.contains("list=OLAK") || url.contains("OLAK5uy_");
+
+    if !is_album {
+        if let Ok(mut playlist) = rusty_ytdl::search::Playlist::get(&playlist_url, None).await {
+            playlist.fetch(Some(limit as u64)).await;
+
+            let is_fake_video = playlist.videos.len() == 1 && playlist.videos.first().map(|v| v.title == "Videos").unwrap_or(false);
+            let mut valid_videos = Vec::new();
+            if !is_fake_video {
+                for video in playlist.videos {
+                    valid_videos.push(video);
+                }
+            }
+
+            if !valid_videos.is_empty() {
+                is_valid_playlist = true;
+                for video in valid_videos {
+                    let duration = if video.duration > 0 {
+                        Some(Duration::from_millis(video.duration))
+                    } else {
+                        None
+                    };
+
+                    tracks.push(Track {
+                        title: video.title,
+                        url: video.url,
+                        duration,
+                        requester_id: serenity::UserId::new(user_id),
+                        requester_name: None,
+                        source_type: SourceType::Playlist,
+                        resolved_url: None,
+                        thumbnail: video.thumbnails.first().map(|t| std::sync::Arc::from(t.url.as_str())),
+                        source_provider: provider_name.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Fallback/Scraper for Album playlists (OLAK...) or failed playlist resolutions
+    if !is_valid_playlist {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36".parse().unwrap(),
+        );
+        headers.insert(
+            reqwest::header::COOKIE,
+            "SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgOmgpwY".parse().unwrap(),
+        );
+
+        if let Ok(res) = http_client.get(&normalized_url)
+            .headers(headers)
+            .send()
+            .await
+        {
+            if let Ok(html) = res.text().await {
+                if let Some(start) = html.find("ytInitialData = {") {
+                    let json_str = &html[start + 16..];
+                    if let Some(end) = json_str.find("};</script>") {
+                        let json_data = &json_str[..=end];
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_data) {
+                            let mut seen_ids = std::collections::HashSet::new();
+                            recursive_find_tracks(&v, &mut tracks, &mut seen_ids, limit, user_id, &provider_name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if tracks.is_empty() {
+        return Err(SerenyaError::Audio("Failed to retrieve YouTube playlist tracks".into()));
+    }
+
+    Ok(tracks)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_recursive_find_tracks() {
+        let json_data = serde_json::json!({
+            "contents": {
+                "twoColumnBrowseResultsRenderer": {
+                    "tabs": [
+                        {
+                            "tabRenderer": {
+                                "content": {
+                                    "sectionListRenderer": {
+                                        "contents": [
+                                            {
+                                                "itemSectionRenderer": {
+                                                    "contents": [
+                                                        {
+                                                            "lockupViewModel": {
+                                                                "contentId": "video_id_1",
+                                                                "metadata": {
+                                                                    "lockupMetadataViewModel": {
+                                                                        "title": {
+                                                                            "content": "Test Lockup Title"
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                        {
+                                                            "playlistVideoRenderer": {
+                                                                "videoId": "video_id_2",
+                                                                "title": {
+                                                                    "runs": [
+                                                                        { "text": "Test Playlist Title" }
+                                                                    ]
+                                                                },
+                                                                "lengthText": {
+                                                                    "simpleText": "3:45"
+                                                                }
+                                                            }
+                                                        },
+                                                        // Duplicate ID to test deduplication
+                                                        {
+                                                            "lockupViewModel": {
+                                                                "contentId": "video_id_1",
+                                                                "metadata": {
+                                                                    "lockupMetadataViewModel": {
+                                                                        "title": {
+                                                                            "content": "Duplicate Title"
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        });
+
+        let mut tracks = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+        recursive_find_tracks(&json_data, &mut tracks, &mut seen_ids, 10, 12345, "YouTube");
+
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].title, "Test Lockup Title");
+        assert_eq!(tracks[0].url, "https://www.youtube.com/watch?v=video_id_1");
+        assert_eq!(tracks[0].duration, None);
+        assert_eq!(tracks[0].source_provider, "YouTube");
+
+        assert_eq!(tracks[1].title, "Test Playlist Title");
+        assert_eq!(tracks[1].url, "https://www.youtube.com/watch?v=video_id_2");
+        assert_eq!(tracks[1].duration, Some(Duration::from_secs(225))); // 3 * 60 + 45 = 225
+        assert_eq!(tracks[1].source_provider, "YouTube");
+    }
+
+    #[tokio::test]
+    async fn test_live_youtube_album_resolution() {
+        let url = "https://music.youtube.com/playlist?list=OLAK5uy_nvYrn-HvzbwuVef3BcLzl70t41Warfbpw";
+        let http_client = reqwest::Client::new();
+        let tracks = resolve_youtube_playlist(url, 10, 12345, &http_client).await.expect("Failed to resolve live album playlist");
+        assert!(!tracks.is_empty(), "Resolved tracks list is empty");
+        assert!(tracks[0].title.contains("SỢ HẠNH PHÚC QUÁ NGẮN") || tracks[0].title.contains("Sợ Hạnh Phúc Quá Ngắn") || tracks[0].title.to_lowercase().contains("hạnh phúc"), "Unexpected title: {}", tracks[0].title);
+        assert_eq!(tracks[0].url, "https://www.youtube.com/watch?v=ns878yW7N2c");
+        assert_eq!(tracks[0].source_provider, "YouTube Music");
+    }
 
     fn metadata_candidate(
         source: &str,
@@ -2242,7 +2569,7 @@ mod tests {
             return Ok(());
         }
         let config = crate::config::load_config("config.yml").await?;
-        crate::audio::runtime::configure(&config.resolver, &config.spotify);
+        crate::audio::runtime::configure(&config.resolver, &config.spotify, config.playback.max_playlist_import);
 
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
@@ -2298,7 +2625,7 @@ mod tests {
             return Ok(());
         }
         let config = crate::config::load_config("config.yml").await?;
-        crate::audio::runtime::configure(&config.resolver, &config.spotify);
+        crate::audio::runtime::configure(&config.resolver, &config.spotify, config.playback.max_playlist_import);
 
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
