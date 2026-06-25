@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use poise::serenity_prelude as serenity;
 
-use crate::audio::{ResolvedInput, resolve_input};
 use crate::core::Track;
 use crate::discord::embeds::now_playing_embed;
 use crate::utils::{Context, Error, SerenyaError};
@@ -73,79 +72,3 @@ pub fn build_search_menu(ctx_id: u64, tracks: &[Track]) -> serenity::CreateSelec
     .placeholder("Select a track to play...")
 }
 
-async fn enqueue_selected_track(
-    ctx: Context<'_>,
-    guild_id: serenity::GuildId,
-    selected_track: Track,
-) -> Result<String, Error> {
-    let player_lock = ctx
-        .data()
-        .guild_players
-        .get(&guild_id)
-        .ok_or_else(|| SerenyaError::NotFound("No player active.".into()))?;
-
-    let mut player = player_lock.write().await;
-    let config = ctx.data().config();
-
-    if player.playback_status == crate::core::PlaybackStatus::Idle && player.now_playing.is_none() {
-        player.now_playing = Some(selected_track.clone());
-        player.playback_status = crate::core::PlaybackStatus::Playing;
-
-        let manager = songbird::get(ctx.serenity_context())
-            .await
-            .ok_or_else(|| SerenyaError::Voice("Songbird not initialized.".into()))?;
-        let call_lock = manager
-            .get(guild_id)
-            .ok_or_else(|| SerenyaError::Voice("Not connected to a voice channel.".into()))?;
-        let resolved_url = crate::audio::extract_stream_url_for_guild(
-            guild_id.get(),
-            &selected_track.url,
-            &ctx.data().http_client,
-        )
-        .await?;
-        let eight_d_enabled = player.eight_d_enabled;
-        let mut call = call_lock.lock().await;
-        let source = crate::audio::source::create_stream_input(
-            Some(selected_track.url.clone()),
-            &resolved_url,
-            eight_d_enabled,
-        )
-        .await?;
-        let handle = call.play_input(source);
-
-        let playback_ctx = crate::audio::events::PlaybackContext {
-            guild_id,
-            database: std::sync::Arc::clone(&ctx.data().database),
-            guild_players: std::sync::Arc::clone(&ctx.data().guild_players),
-            http_client: ctx.data().http_client.clone(),
-            serenity_ctx: ctx.serenity_context().clone(),
-            config: ctx.data().config(),
-        };
-
-        let _ = handle.add_event(
-            songbird::Event::Track(songbird::TrackEvent::End),
-            crate::audio::events::TrackEndHandler {
-                ctx: playback_ctx.clone(),
-            },
-        );
-        let _ = handle.add_event(
-            songbird::Event::Track(songbird::TrackEvent::Error),
-            crate::audio::events::TrackErrorHandler { ctx: playback_ctx },
-        );
-        player.current_track_handle = Some(handle);
-
-        let msg = if selected_track.url.starts_with("http") {
-            format!(
-                "🎶 **Now Playing:** [{}]({})",
-                selected_track.title, selected_track.url
-            )
-        } else {
-            format!("🎶 **Now Playing:** {}", selected_track.title)
-        };
-        Ok(msg)
-    } else {
-        let max_queue_size = config.playback.max_queue_size;
-        player.queue.push(selected_track.clone(), max_queue_size)?;
-        Ok(format!("📝 **Enqueued:** {}", selected_track.title))
-    }
-}

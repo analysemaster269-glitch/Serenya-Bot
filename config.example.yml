@@ -36,13 +36,13 @@ playback:
 resolver:
   max_concurrent_ytdlp: 4
   max_concurrent_resolves_per_guild: 2
-  global_search_timeout_ms: 1800
+  global_search_timeout_ms: 3500
   deezer_timeout_ms: 800
   apple_music_timeout_ms: 800
-  youtube_music_timeout_ms: 1000
-  soundcloud_timeout_ms: 1500
+  youtube_music_timeout_ms: 2000
+  soundcloud_timeout_ms: 2000
   spotify_timeout_ms: 800
-  youtube_timeout_ms: 1500
+  youtube_timeout_ms: 2000
   ytsearch_timeout_ms: 3000
   yt_dlp_timeout_seconds: 10
   prefetch_timeout_seconds: 8
