@@ -65,7 +65,9 @@ fn chunk_lyrics(lyrics: &str) -> Vec<String> {
 #[poise::command(slash_command, prefix_command)]
 pub async fn lyrics(
     ctx: Context<'_>,
-    #[description = "Song title or query to search for"] query: Option<String>,
+    #[description = "Song title or query to search for"]
+    #[rest]
+    query: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
 

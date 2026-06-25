@@ -1,7 +1,7 @@
-use rquickjs::{Context, Runtime, Function};
 use once_cell::sync::Lazy;
 use rand::Rng;
 use regex::Regex;
+use rquickjs::{Context, Function, Runtime};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -433,9 +433,7 @@ fn decipher(
                 Ok(ctx) => ctx,
                 Err(_) => return get_url_string(),
             };
-            let eval_res = context.with(|ctx| {
-                ctx.eval::<(), _>(decipher_script_string.1)
-            });
+            let eval_res = context.with(|ctx| ctx.eval::<(), _>(decipher_script_string.1));
             if eval_res.is_err() {
                 return get_url_string();
             }
@@ -446,7 +444,10 @@ fn decipher(
 
     let result = context.with(|ctx| -> Option<String> {
         let func: rquickjs::Function = ctx.globals().get(decipher_script_string.0).ok()?;
-        let s_val = args.get("s").and_then(serde_json::Value::as_str).unwrap_or("");
+        let s_val = args
+            .get("s")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         func.call((s_val,)).ok()
     });
 

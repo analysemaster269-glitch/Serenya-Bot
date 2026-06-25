@@ -11,7 +11,64 @@ async fn get_memory_usage() -> String {
             }
         }
     }
-    "N/A (Non-Linux)".to_string()
+
+    #[cfg(target_os = "windows")]
+    {
+        mod win32 {
+            use std::ffi::c_void;
+
+            #[repr(C)]
+            #[allow(non_snake_case)]
+            pub struct ProcessMemoryCounters {
+                pub cb: u32,
+                pub PageFaultCount: u32,
+                pub PeakWorkingSetSize: usize,
+                pub WorkingSetSize: usize,
+                pub QuotaPeakPagedPoolUsage: usize,
+                pub QuotaPagedPoolUsage: usize,
+                pub QuotaPeakNonPagedPoolUsage: usize,
+                pub QuotaNonPagedPoolUsage: usize,
+                pub PagefileUsage: usize,
+                pub PeakPagefileUsage: usize,
+            }
+
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                pub fn GetCurrentProcess() -> *mut c_void;
+            }
+
+            #[link(name = "psapi")]
+            unsafe extern "system" {
+                pub fn GetProcessMemoryInfo(
+                    process: *mut c_void,
+                    pmc: *mut ProcessMemoryCounters,
+                    cb: u32,
+                ) -> i32;
+            }
+        }
+
+        let mut pmc = win32::ProcessMemoryCounters {
+            cb: size_of::<win32::ProcessMemoryCounters>() as u32,
+            PageFaultCount: 0,
+            PeakWorkingSetSize: 0,
+            WorkingSetSize: 0,
+            QuotaPeakPagedPoolUsage: 0,
+            QuotaPagedPoolUsage: 0,
+            QuotaPeakNonPagedPoolUsage: 0,
+            QuotaNonPagedPoolUsage: 0,
+            PagefileUsage: 0,
+            PeakPagefileUsage: 0,
+        };
+
+        unsafe {
+            let process = win32::GetCurrentProcess();
+            if win32::GetProcessMemoryInfo(process, &mut pmc, pmc.cb) != 0 {
+                return format!("{:.2} MB", pmc.WorkingSetSize as f64 / 1024.0 / 1024.0);
+            }
+        }
+    }
+
+    "N/A".to_string()
 }
 
 /// Show statistics about the bot and the current guild.
@@ -21,7 +78,6 @@ pub async fn stats(ctx: Context<'_>) -> Result<(), Error> {
         .guild_id()
         .ok_or_else(|| SerenyaError::Config("This command can only be used in a server.".into()))?;
 
-    // 1. Bot-wide statistics
     let uptime = ctx.data().start_time.elapsed();
     let uptime_str = crate::discord::embeds::format_duration(uptime);
     let memory_str = get_memory_usage().await;
@@ -42,13 +98,11 @@ pub async fn stats(ctx: Context<'_>) -> Result<(), Error> {
 
     let instance_name = ctx.data().config().bot.instance_id.clone();
 
-    // 2. Guild-specific statistics
     let database = &ctx.data().database;
     let guild_settings = database.get_guild_settings(guild_id.get()).await;
     let guild_songs_played = guild_settings.total_songs_played;
     let guild_listening_time = guild_settings.total_listening_seconds;
 
-    // 3. Current active queue statistics
     let mut queue_size = 0;
     let mut listeners = 0;
 

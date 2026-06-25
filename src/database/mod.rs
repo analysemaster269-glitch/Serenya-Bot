@@ -131,10 +131,10 @@ impl DatabaseManager {
 
     pub fn get_guild_prefix(&self, guild_id: u64, default_prefix: &str) -> Arc<str> {
         if let Some(cached) = self.prefix_cache.get(&guild_id) {
-            match cached.value() {
-                CachedPrefix::Default => return Arc::from(default_prefix),
-                CachedPrefix::Custom(prefix) => return prefix.clone(),
-            }
+            return match cached.value() {
+                CachedPrefix::Default => Arc::from(default_prefix),
+                CachedPrefix::Custom(prefix) => prefix.clone(),
+            };
         }
         Arc::from(default_prefix)
     }
@@ -150,9 +150,10 @@ impl DatabaseManager {
         let data = Arc::make_mut(&mut *data_guard);
         let prefix_opt = settings.prefix.clone();
         data.guild_settings.insert(guild_id.to_string(), settings);
-        
+
         if let Some(ref prefix) = prefix_opt {
-            self.prefix_cache.insert(guild_id, CachedPrefix::Custom(Arc::from(prefix.as_str())));
+            self.prefix_cache
+                .insert(guild_id, CachedPrefix::Custom(Arc::from(prefix.as_str())));
         } else {
             self.prefix_cache.insert(guild_id, CachedPrefix::Default);
         }
@@ -169,15 +170,16 @@ impl DatabaseManager {
         let data = Arc::make_mut(&mut *data_guard);
         let key = guild_id.to_string();
         let settings = data.guild_settings.entry(key).or_default();
-        
+
         let res = f(settings);
-        
+
         if let Some(ref prefix) = settings.prefix {
-            self.prefix_cache.insert(guild_id, CachedPrefix::Custom(Arc::from(prefix.as_str())));
+            self.prefix_cache
+                .insert(guild_id, CachedPrefix::Custom(Arc::from(prefix.as_str())));
         } else {
             self.prefix_cache.insert(guild_id, CachedPrefix::Default);
         }
-        
+
         self.is_dirty
             .store(true, std::sync::atomic::Ordering::SeqCst);
         res
@@ -378,7 +380,8 @@ impl DatabaseManager {
 
         if !self.prefix_cache.contains_key(&guild_id) {
             if let Some(ref p) = settings.prefix {
-                self.prefix_cache.insert(guild_id, CachedPrefix::Custom(Arc::from(p.as_str())));
+                self.prefix_cache
+                    .insert(guild_id, CachedPrefix::Custom(Arc::from(p.as_str())));
             } else {
                 self.prefix_cache.insert(guild_id, CachedPrefix::Default);
             }

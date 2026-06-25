@@ -97,8 +97,12 @@ async fn enqueue_selected_track(
         let call_lock = manager
             .get(guild_id)
             .ok_or_else(|| SerenyaError::Voice("Not connected to a voice channel.".into()))?;
-        let resolved_url =
-            crate::audio::extract_stream_url_for_guild(guild_id.get(), &selected_track.url, &ctx.data().http_client).await?;
+        let resolved_url = crate::audio::extract_stream_url_for_guild(
+            guild_id.get(),
+            &selected_track.url,
+            &ctx.data().http_client,
+        )
+        .await?;
         let eight_d_enabled = player.eight_d_enabled;
         let mut call = call_lock.lock().await;
         let source = crate::audio::source::create_stream_input(
@@ -126,9 +130,7 @@ async fn enqueue_selected_track(
         );
         let _ = handle.add_event(
             songbird::Event::Track(songbird::TrackEvent::Error),
-            crate::audio::events::TrackErrorHandler {
-                ctx: playback_ctx,
-            },
+            crate::audio::events::TrackErrorHandler { ctx: playback_ctx },
         );
         player.current_track_handle = Some(handle);
 
@@ -146,114 +148,4 @@ async fn enqueue_selected_track(
         player.queue.push(selected_track.clone(), max_queue_size)?;
         Ok(format!("📝 **Enqueued:** {}", selected_track.title))
     }
-}
-
-/// Search for a song and pick from the top 5 results.
-#[poise::command(
-    slash_command,
-    prefix_command,
-    check = "crate::discord::checks::require_same_voice_channel"
-)]
-pub async fn search(
-    ctx: Context<'_>,
-    #[description = "Search query"] query: String,
-) -> Result<(), Error> {
-    let guild_id = ctx
-        .guild_id()
-        .ok_or_else(|| SerenyaError::Config("This command can only be used in a server.".into()))?;
-
-    ctx.defer().await?;
-
-    let mut tracks = match resolve_input(
-        &query,
-        ctx.author().id.get(),
-        &ctx.data().database,
-        &ctx.data().http_client,
-    )
-    .await?
-    {
-        ResolvedInput::SearchResults(tracks) => tracks,
-        ResolvedInput::Track(track) => vec![*track],
-        ResolvedInput::Playlist(tracks) => tracks,
-    };
-    if tracks.is_empty() {
-        ctx.say("No search results found.").await?;
-        return Ok(());
-    }
-
-    let select_menu = build_search_menu(ctx.id(), &tracks);
-    let components = vec![serenity::CreateActionRow::SelectMenu(select_menu)];
-    let reply = poise::CreateReply::default()
-        .content("🔍 Select a track to play:")
-        .components(components);
-
-    let msg = ctx.send(reply).await?;
-    let mut msg_inner = msg.into_message().await?;
-
-    let collector = serenity::ComponentInteractionCollector::new(ctx.serenity_context())
-        .author_id(ctx.author().id)
-        .message_id(msg_inner.id)
-        .timeout(std::time::Duration::from_secs(60));
-
-    if let Some(interaction) = collector.next().await {
-        let selected_idx_str = match &interaction.data.kind {
-            serenity::ComponentInteractionDataKind::StringSelect { values } => values
-                .first()
-                .ok_or_else(|| SerenyaError::Audio("No selection received.".into()))?,
-            _ => return Err(SerenyaError::Audio("Invalid interaction type.".into()).into()),
-        };
-        let selected_idx: usize = selected_idx_str
-            .parse()
-            .map_err(|_| SerenyaError::Audio("Invalid selection index.".into()))?;
-
-        let selected_track = tracks.remove(selected_idx);
-        let mut selected_tracks = if is_metadata_search_option(&selected_track) {
-            resolve_input(
-                &selected_track.url,
-                ctx.author().id.get(),
-                &ctx.data().database,
-                &ctx.data().http_client,
-            )
-            .await?
-            .into_tracks_or_top()
-        } else {
-            vec![selected_track]
-        };
-        let mut selected_track = selected_tracks
-            .drain(..)
-            .next()
-            .ok_or_else(|| SerenyaError::Audio("No playable track resolved.".into()))?;
-        selected_track.requester_id = ctx.author().id;
-        selected_track.requester_name = Some(ctx.author().name.clone());
-
-        let response_content = enqueue_selected_track(ctx, guild_id, selected_track).await?;
-
-        let _ = interaction
-            .create_response(
-                &ctx.serenity_context().http,
-                serenity::CreateInteractionResponse::UpdateMessage(
-                    serenity::CreateInteractionResponseMessage::new()
-                        .content(response_content)
-                        .components(vec![]),
-                ),
-            )
-            .await;
-    } else {
-        let _ = msg_inner
-            .edit(
-                &ctx.serenity_context().http,
-                serenity::EditMessage::new()
-                    .content("⏱️ Search selection timed out.")
-                    .components(vec![]),
-            )
-            .await;
-    }
-
-    Ok(())
-}
-
-fn is_metadata_search_option(track: &Track) -> bool {
-    track.source_provider.starts_with("Deezer")
-        || track.source_provider.starts_with("Spotify")
-        || track.source_provider.starts_with("Apple Music")
 }

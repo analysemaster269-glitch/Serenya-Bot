@@ -14,7 +14,6 @@ pub(crate) async fn seek_by_restart(
     player_lock: std::sync::Arc<tokio::sync::RwLock<crate::core::GuildPlayer>>,
     target_position: Duration,
 ) -> Result<(), Error> {
-    // 1. Get the stream URL of the current track
     let (url, resolved_url) = {
         let player = player_lock.read().await;
         let track = player
@@ -27,7 +26,12 @@ pub(crate) async fn seek_by_restart(
     let stream = match resolved_url {
         Some(stream) => stream,
         None => std::sync::Arc::new(
-            crate::audio::source::extract_stream_url_for_guild(guild_id.get(), &url, &ctx.data().http_client).await?,
+            crate::audio::source::extract_stream_url_for_guild(
+                guild_id.get(),
+                &url,
+                &ctx.data().http_client,
+            )
+            .await?,
         ),
     };
 
@@ -43,7 +47,6 @@ pub(crate) async fn seek_by_restart(
     )
     .await?;
 
-    // 3. Stop the current track and play the new input
     let manager = songbird::get(ctx.serenity_context())
         .await
         .ok_or_else(|| SerenyaError::Voice("Songbird manager not initialized.".into()))?
@@ -66,7 +69,6 @@ pub(crate) async fn seek_by_restart(
         call.play_input(source)
     };
 
-    // 4. Register event handlers
     let playback_ctx = crate::audio::events::PlaybackContext {
         guild_id,
         database: std::sync::Arc::clone(&ctx.data().database),
@@ -84,15 +86,12 @@ pub(crate) async fn seek_by_restart(
         end_handler,
     );
 
-    let error_handler = crate::audio::events::TrackErrorHandler {
-        ctx: playback_ctx,
-    };
+    let error_handler = crate::audio::events::TrackErrorHandler { ctx: playback_ctx };
     let _ = handle.add_event(
         songbird::Event::Track(songbird::TrackEvent::Error),
         error_handler,
     );
 
-    // 5. Update player's track handle
     {
         let mut player = player_lock.write().await;
         if player
@@ -149,7 +148,7 @@ pub async fn seek(
     Ok(())
 }
 
-/// Fast forward the song by a duration.
+/// Fast-forward the song by a duration.
 #[poise::command(
     slash_command,
     prefix_command,

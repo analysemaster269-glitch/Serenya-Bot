@@ -70,7 +70,6 @@ pub async fn quality(
 
     let quality_mode = Quality::from_str(&mode)?;
 
-    // 1. Get guild to check premium boost tier
     let premium_tier = {
         let guild = ctx
             .guild()
@@ -78,7 +77,6 @@ pub async fn quality(
         guild.premium_tier
     };
 
-    // 2. Validate boost tier requirements
     match quality_mode {
         Quality::Premium => {
             if premium_tier < serenity::PremiumTier::Tier2 {
@@ -101,13 +99,11 @@ pub async fn quality(
         _ => {}
     }
 
-    // 3. Save quality to guild settings
     let db = &ctx.data().database;
     let mut settings = db.get_guild_settings(guild_id.get()).await;
     settings.quality = quality_mode.to_str().to_owned();
     db.update_guild_settings(guild_id.get(), settings).await;
 
-    // 4. Calculate target bitrate for the voice channel based on premium tier limits
     let raw_bitrate = quality_mode.to_bitrate();
     let max_tier_bitrate = match premium_tier {
         serenity::PremiumTier::Tier3 => 384_000,
@@ -116,18 +112,16 @@ pub async fn quality(
         _ => 96_000,
     };
     let target_bitrate = if raw_bitrate == 0 {
-        0 // dynamic
+        0
     } else {
         raw_bitrate.min(max_tier_bitrate)
     };
 
-    // 5. Update active voice channel bitrate and Songbird encoder
     let player_lock = ctx.data().guild_players.get(&guild_id);
 
     if let Some(player_lock) = player_lock {
         let player = player_lock.read().await;
         if let Some(vc_id) = player.voice_channel {
-            // Edit Discord channel bitrate if not Auto
             if quality_mode != Quality::Auto {
                 let _ = vc_id
                     .edit(
@@ -137,7 +131,6 @@ pub async fn quality(
                     .await;
             }
 
-            // Update Songbird encoder bitrate if connected
             let manager = songbird::get(ctx.serenity_context())
                 .await
                 .ok_or_else(|| SerenyaError::Voice("Songbird manager not initialized".into()))?

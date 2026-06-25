@@ -18,14 +18,14 @@ pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
     let embed = poise::serenity_prelude::CreateEmbed::new()
         .title(format!("🤖 About {}", config.bot.display_name))
         .description("Serenya là một bot nhạc Discord chất lượng cao, mang lại trải nghiệm âm thanh mượt mà và giao diện tương tác trực quan nhất.")
-        .field("Người Tạo", "💙 **Herzchen**", true)
+        .field("Người Tạo", "💙 **ItzHerzchen**", true)
         .field("GitHub Repository", "[🔗 Herzchens/Serenya-Bot](https://github.com/Herzchens/Serenya-Bot)", true)
         .field(
             "Khả Năng & Tính Năng",
-            "• Phát nhạc cực nhanh từ **YouTube** và **Spotify**\n\
+            "• Phát nhạc cực nhanh từ **YouTube**, **Spotify** và nhiều nền tảng khác\n\
              • Hỗ trợ quản lý hàng chờ nâng cao (chuyển bài, tua nhanh, lặp bài)\n\
              • Quản lý playlist cá nhân và đồng bộ dữ liệu thông minh\n\
-             • Tìm kiếm lời bài hát trực tiếp trên Discord",
+             • Tìm kiếm lời bài hát trực tiếp trên Discord và hơn thế nữa",
             false,
         )
         .color(0x5865F2);
@@ -159,7 +159,6 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
         new_prefix
     );
 
-    // Register secrets for redaction on reload
     crate::logging::register_secret_to_redact(&new_config.bot.token);
     if let Some(ref cookie) = new_config.spotify.sp_dc {
         crate::logging::register_secret_to_redact(cookie);
@@ -181,7 +180,11 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
         ctx.data().config.store(new_config.clone());
     }
 
-    crate::audio::runtime::configure(&resolver_config, &new_config.spotify, new_config.playback.max_playlist_import);
+    crate::audio::runtime::configure(
+        &resolver_config,
+        &new_config.spotify,
+        new_config.playback.max_playlist_import,
+    );
     let (metadata_len, stream_len) = crate::audio::source::clear_caches();
 
     let restart_note = if token_changed {

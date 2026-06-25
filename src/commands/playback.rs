@@ -21,7 +21,6 @@ pub async fn play(
     // 1. Defer immediately to prevent Discord interaction timeout (3s deadline)
     ctx.defer().await?;
 
-    // 2. Check if user is in a voice channel
     let user_channel_id = {
         let guild = ctx
             .guild()
@@ -163,7 +162,6 @@ pub(crate) async fn enqueue_and_play_resolved(
     let requested_track_count = tracks.len();
     let show_queue_after_enqueue = requested_track_count > 1;
 
-    // Get/Create guild player
     let player_lock = ctx
         .data()
         .guild_players
@@ -181,7 +179,6 @@ pub(crate) async fn enqueue_and_play_resolved(
     let max_queue_size = config.playback.max_queue_size;
 
     if player.playback_status == PlaybackStatus::Idle && player.now_playing.is_none() {
-        // Play first track immediately
         let mut first_track = tracks.remove(0);
         let requester_name = ctx.author().name.clone();
         first_track.requester_name = Some(requester_name.clone());
@@ -194,7 +191,6 @@ pub(crate) async fn enqueue_and_play_resolved(
         player.now_playing = Some(first_track.clone());
         player.playback_status = PlaybackStatus::Playing;
 
-        // Queue remaining tracks (if any)
         let added = player.queue.push_batch(tracks, max_queue_size)?;
 
         // Spawn background play resolution task
@@ -220,7 +216,6 @@ pub(crate) async fn enqueue_and_play_resolved(
                 {
                     tracing::error!("Failed to resolve Spotify track search: {:?}", e);
                 } else {
-                    // Update player's now_playing field with the resolved track
                     let mut player = player_lock_clone.write().await;
                     if player.playback_status == PlaybackStatus::Playing
                         && let Some(ref mut np) = player.now_playing
@@ -231,10 +226,12 @@ pub(crate) async fn enqueue_and_play_resolved(
                 }
             }
 
-            // 1. Resolve stream URL in background
-            let stream_res =
-                crate::audio::extract_stream_url_for_guild(guild_id.get(), &current_track.url, &http_client_clone)
-                    .await;
+            let stream_res = crate::audio::extract_stream_url_for_guild(
+                guild_id.get(),
+                &current_track.url,
+                &http_client_clone,
+            )
+            .await;
 
             // 2. Race condition check: check if player was reset/stopped/skipped while resolving
             {
@@ -256,7 +253,6 @@ pub(crate) async fn enqueue_and_play_resolved(
                 }
             }
 
-            // 3. Play the input
             let resolved_url = match stream_res {
                 Ok(resolved_url) => resolved_url,
                 Err(e) => {
@@ -341,7 +337,6 @@ pub(crate) async fn enqueue_and_play_resolved(
             let handle = call.play_input(source);
             tracing::info!("Playback started for track: {:?}", current_track.title);
 
-            // 4. Register event handlers
             let playback_ctx = crate::audio::events::PlaybackContext {
                 guild_id,
                 database: database_clone.clone(),
@@ -359,12 +354,9 @@ pub(crate) async fn enqueue_and_play_resolved(
             );
             let _ = handle.add_event(
                 songbird::Event::Track(songbird::TrackEvent::Error),
-                TrackErrorHandler {
-                    ctx: playback_ctx,
-                },
+                TrackErrorHandler { ctx: playback_ctx },
             );
 
-            // 5. Update track handle in player
             let mut player = player_lock_clone.write().await;
             // Check race condition again
             if player.playback_status == PlaybackStatus::Playing
@@ -410,7 +402,6 @@ pub(crate) async fn enqueue_and_play_resolved(
 
                 return;
             }
-            // If check failed, stop the handle
             let _ = handle.stop();
         });
 
@@ -441,11 +432,9 @@ pub(crate) async fn enqueue_and_play_resolved(
             ctx.send(reply).await?;
         }
     } else {
-        // Enqueue all tracks
         let track_count = tracks.len();
         let first_title = tracks.first().map(|t| t.title.clone()).unwrap_or_default();
 
-        // Populate requester names
         let requester_name = ctx.author().name.clone();
         for t in &mut tracks {
             t.requester_name = Some(requester_name.clone());
@@ -639,7 +628,6 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
 
     let mut player = player_lock.write().await;
 
-    // Reset player state (clears queue and stops the active track)
     let vc = player.voice_channel;
     let ac = player.announce_channel;
 
@@ -793,7 +781,7 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
     let track_requester_id = player.now_playing.as_ref().map(|t| t.requester_id);
 
     let can_skip = author_id.get() == owner_id || Some(author_id) == track_requester_id;
-    
+
     // Drop write lock before checking requester absence or executing skip (which awaits and gets its own locks)
     drop(player);
 

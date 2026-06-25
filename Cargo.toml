@@ -1,6 +1,6 @@
 [package]
 name = "serenya"
-version = "1.1.1"
+version = "1.1.4"
 edition = "2024"
 rust-version = "1.96.0"
 description = "A multi-guild Discord music bot"
@@ -68,7 +68,7 @@ strip = false
 inherits = "release"
 strip = true
 
-# Optimize dependencies in dev mode for much faster startup and run times (e.g. boa_engine)
+# Optimize dependencies in dev mode for much faster startup and run times (e.g. rquickjs)
 [profile.dev.package."*"]
 opt-level = 3
 

@@ -43,8 +43,6 @@ static METADATA_CACHE: LazyLock<ArcSwap<Cache<String, Track>>> =
 static STREAM_CACHE: LazyLock<ArcSwap<Cache<String, Arc<youtube_resolver::ResolvedStream>>>> =
     LazyLock::new(|| ArcSwap::from_pointee(build_stream_cache()));
 
-
-
 pub async fn cache_get_metadata(query: &str) -> Option<Track> {
     let cache = QUERY_CACHE.load();
     if let Some(track) = cache.get(query).await {
@@ -325,7 +323,7 @@ async fn run_ytdlp_stream_resolution(
 fn build_soundcloud_stream_cache() -> Cache<String, Arc<youtube_resolver::ResolvedStream>> {
     Cache::builder()
         .max_capacity(4096)
-        .time_to_live(Duration::from_secs(300)) // 5 minutes
+        .time_to_live(Duration::from_secs(300))
         .build()
 }
 
@@ -337,7 +335,6 @@ async fn resolve_soundcloud_stream_url(
     track_url: &str,
     http_client: &reqwest::Client,
 ) -> Result<youtube_resolver::ResolvedStream, SerenyaError> {
-    // 1. Check cache
     if let Some(stream) = SOUNDCLOUD_STREAM_CACHE.load().get(track_url).await {
         tracing::debug!(track_url, "SoundCloud stream cache hit");
         return Ok((*stream).clone());
@@ -350,7 +347,6 @@ async fn resolve_soundcloud_stream_url(
     // 3. Resolve URL to track metadata with retry and exponential backoff
     let metadata = fetch_track_metadata_with_backoff(track_url, http_client).await?;
 
-    // 4. Select the best transcoding
     let media = metadata.media.ok_or_else(|| {
         SerenyaError::Audio("SoundCloud track is missing media transcodings".to_owned())
     })?;
@@ -362,7 +358,6 @@ async fn resolve_soundcloud_stream_url(
     let transcoding_url = transcoding.url.clone();
     tracing::debug!(transcoding_url, "Selected SoundCloud transcoding");
 
-    // 5. Query transcoding URL to get direct playable URL
     let stream_url = fetch_stream_url_with_backoff(&transcoding_url, http_client).await?;
 
     let stream = youtube_resolver::ResolvedStream {
@@ -387,7 +382,6 @@ async fn resolve_soundcloud_stream_url(
 fn select_best_transcoding(
     transcodings: &[crate::audio::providers::SoundCloudTranscoding],
 ) -> Option<&crate::audio::providers::SoundCloudTranscoding> {
-    // 1. Check for Opus HLS
     if let Some(t) = transcodings.iter().find(|t| {
         t.format.protocol == "hls"
             && t.format
@@ -399,7 +393,6 @@ fn select_best_transcoding(
         return Some(t);
     }
 
-    // 2. Check for AAC HLS
     if let Some(t) = transcodings.iter().find(|t| {
         t.format.protocol == "hls"
             && t.format
@@ -411,12 +404,10 @@ fn select_best_transcoding(
         return Some(t);
     }
 
-    // 3. Check for any HLS
     if let Some(t) = transcodings.iter().find(|t| t.format.protocol == "hls") {
         return Some(t);
     }
 
-    // 4. Check for Progressive
     if let Some(t) = transcodings
         .iter()
         .find(|t| t.format.protocol == "progressive")
@@ -615,7 +606,6 @@ async fn extract_stream_url_inner(
         }
     }
 
-    // Non-YouTube URL fallback.
     let res = run_ytdlp_stream_resolution(track_url, youtube_url, &negative_key).await;
     if let Ok(ref stream) = res {
         tracing::info!(track_url, stream_url = %stream.url, "yt-dlp stream resolution succeeded");

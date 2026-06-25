@@ -52,7 +52,7 @@ async fn test_db_playlists() -> Result<(), Box<dyn std::error::Error>> {
     // Add track
     let track = PlaylistTrack {
         title: "Track 1".to_owned(),
-        url: "http://example.com/1".to_owned(),
+        url: "https://example.com/1".to_owned(),
         duration_secs: Some(180),
     };
     manager.add_to_playlist(12345, "my_list", track, 2).await?;
@@ -67,14 +67,14 @@ async fn test_db_playlists() -> Result<(), Box<dyn std::error::Error>> {
     // Check limit enforce
     let track2 = PlaylistTrack {
         title: "Track 2".to_owned(),
-        url: "http://example.com/2".to_owned(),
+        url: "https://example.com/2".to_owned(),
         duration_secs: None,
     };
     manager.add_to_playlist(12345, "my_list", track2, 2).await?;
 
     let track3 = PlaylistTrack {
         title: "Track 3".to_owned(),
-        url: "http://example.com/3".to_owned(),
+        url: "https://example.com/3".to_owned(),
         duration_secs: None,
     };
     assert!(

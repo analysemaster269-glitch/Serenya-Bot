@@ -274,7 +274,7 @@ mod tests {
             spotify: test_spotify(),
             playback: test_playback(),
             resolver: ResolverSection::default(),
-            emojis: Some(crate::config::EmojisSection::default()),
+            emojis: Some(EmojisSection::default()),
         };
         assert!(validate_config(&config).is_err());
     }
@@ -296,7 +296,7 @@ mod tests {
             spotify: test_spotify(),
             playback: test_playback(),
             resolver: ResolverSection::default(),
-            emojis: Some(crate::config::EmojisSection::default()),
+            emojis: Some(EmojisSection::default()),
         };
         assert!(validate_config(&config).is_err());
     }
@@ -318,7 +318,7 @@ mod tests {
             spotify: test_spotify(),
             playback: test_playback(),
             resolver: ResolverSection::default(),
-            emojis: Some(crate::config::EmojisSection::default()),
+            emojis: Some(EmojisSection::default()),
         };
         assert!(validate_config(&config).is_err());
     }
@@ -340,7 +340,7 @@ mod tests {
             spotify: test_spotify(),
             playback: test_playback(),
             resolver: ResolverSection::default(),
-            emojis: Some(crate::config::EmojisSection::default()),
+            emojis: Some(EmojisSection::default()),
         };
         assert!(validate_config(&config).is_ok());
     }

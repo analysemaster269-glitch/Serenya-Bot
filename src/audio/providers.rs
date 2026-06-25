@@ -23,9 +23,7 @@ pub trait MetadataProvider: Send + Sync {
     ) -> Result<Vec<TrackCandidate>, SerenyaError>;
 }
 
-// ----------------------------------------------------
 // Utilities
-// ----------------------------------------------------
 pub fn url_encode(s: &str) -> String {
     percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
@@ -76,9 +74,7 @@ fn parse_simple_duration(s: &str) -> Option<Duration> {
     Some(Duration::from_secs(secs))
 }
 
-// ----------------------------------------------------
 // Spotify Metadata Provider
-// ----------------------------------------------------
 pub struct SpotifyProvider;
 
 impl SpotifyProvider {
@@ -95,7 +91,6 @@ impl SpotifyProvider {
             )
             .send();
 
-        // 10s Timeout guard
         let response = tokio::time::timeout(Duration::from_secs(10), html_fut)
             .await
             .map_err(|_| SerenyaError::Audio("Timeout fetching Spotify page".to_owned()))?
@@ -132,11 +127,11 @@ impl SpotifyProvider {
 struct SpotifyToken {
     access_token: String,
     client_id: String,
-    expires_at: std::time::Instant,
+    expires_at: Instant,
     cookie_hash: u64,
 }
 
-static SPOTIFY_TOKEN_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<SpotifyToken>>> =
+static SPOTIFY_TOKEN_CACHE: std::sync::OnceLock<Mutex<Option<SpotifyToken>>> =
     std::sync::OnceLock::new();
 
 const SPOTIFY_WEB_TOKEN_URL: &str = "https://open.spotify.com/api/token";
@@ -159,12 +154,11 @@ struct SpotifyClientTokenCache {
     client_token: String,
     client_version: String,
     device_id: String,
-    expires_at: std::time::Instant,
+    expires_at: Instant,
 }
 
-static SPOTIFY_CLIENT_TOKEN_CACHE: std::sync::OnceLock<
-    tokio::sync::Mutex<Option<SpotifyClientTokenCache>>,
-> = std::sync::OnceLock::new();
+static SPOTIFY_CLIENT_TOKEN_CACHE: std::sync::OnceLock<Mutex<Option<SpotifyClientTokenCache>>> =
+    std::sync::OnceLock::new();
 
 pub(crate) struct SpotifyClientTokenInfo {
     pub client_token: String,
@@ -200,7 +194,7 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
 
 pub(crate) async fn get_spotify_session_info(
     http_client: &reqwest::Client,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> Result<SpotifySessionInfo, SerenyaError> {
     let sp_dc = crate::audio::runtime::spotify_settings()
         .and_then(|config| config.sp_dc.clone())
@@ -208,13 +202,13 @@ pub(crate) async fn get_spotify_session_info(
         .ok_or_else(|| SerenyaError::Audio("Spotify sp_dc cookie is not configured.".to_owned()))?;
 
     let cookie_hash = spotify_cookie_hash(&sp_dc);
-    let cache_lock = SPOTIFY_TOKEN_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
-    let now = std::time::Instant::now();
+    let cache_lock = SPOTIFY_TOKEN_CACHE.get_or_init(|| Mutex::new(None));
+    let now = Instant::now();
     {
         let cache = cache_lock.lock().await;
         if let Some(ref token) = *cache
             && token.cookie_hash == cookie_hash
-            && token.expires_at > now + std::time::Duration::from_secs(60)
+            && token.expires_at > now + Duration::from_secs(60)
         {
             return Ok(SpotifySessionInfo {
                 access_token: token.access_token.clone(),
@@ -250,9 +244,9 @@ pub(crate) async fn get_spotify_session_info(
             let delta_ms = timestamp_ms as i64 - now_ms;
             u64::try_from(delta_ms.max(0)).ok()
         })
-        .map(std::time::Duration::from_millis)
+        .map(Duration::from_millis)
         .unwrap_or_else(|| {
-            std::time::Duration::from_secs(
+            Duration::from_secs(
                 token_json
                     .get("expires_in")
                     .and_then(|value| value.as_u64())
@@ -279,10 +273,10 @@ pub(crate) async fn get_spotify_session_info(
 pub(crate) async fn get_spotify_client_token_info(
     http_client: &reqwest::Client,
     client_id: &str,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> Result<SpotifyClientTokenInfo, SerenyaError> {
-    let cache_lock = SPOTIFY_CLIENT_TOKEN_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
-    let now = std::time::Instant::now();
+    let cache_lock = SPOTIFY_CLIENT_TOKEN_CACHE.get_or_init(|| Mutex::new(None));
+    let now = Instant::now();
     {
         let cache = cache_lock.lock().await;
         if let Some(ref cached) = *cache
@@ -425,7 +419,7 @@ pub(crate) async fn get_spotify_client_token_info(
         client_token: client_token.clone(),
         client_version: client_version.clone(),
         device_id: device_id.clone(),
-        expires_at: now + std::time::Duration::from_secs(3600),
+        expires_at: now + Duration::from_secs(3600),
     });
 
     Ok(SpotifyClientTokenInfo {
@@ -437,7 +431,7 @@ pub(crate) async fn get_spotify_client_token_info(
 
 pub(crate) async fn get_spotify_access_token(
     http_client: &reqwest::Client,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> Result<String, SerenyaError> {
     let session = get_spotify_session_info(http_client, timeout).await?;
     Ok(session.access_token)
@@ -445,7 +439,7 @@ pub(crate) async fn get_spotify_access_token(
 
 async fn fetch_spotify_web_token(
     http_client: &reqwest::Client,
-    timeout: std::time::Duration,
+    timeout: Duration,
     sp_dc: &str,
 ) -> Result<serde_json::Value, SerenyaError> {
     let local_time = chrono::Utc::now().timestamp();
@@ -465,7 +459,7 @@ async fn fetch_spotify_web_token(
 
 async fn request_spotify_web_token_reasons(
     http_client: &reqwest::Client,
-    timeout: std::time::Duration,
+    timeout: Duration,
     sp_dc: &str,
     timestamp_seconds: i64,
 ) -> Result<serde_json::Value, SerenyaError> {
@@ -493,7 +487,7 @@ async fn request_spotify_web_token_reasons(
 
 async fn request_spotify_web_token(
     http_client: &reqwest::Client,
-    timeout: std::time::Duration,
+    timeout: Duration,
     sp_dc: &str,
     reason: &str,
     timestamp_seconds: i64,
@@ -539,7 +533,7 @@ async fn request_spotify_web_token(
 
 async fn fetch_spotify_server_time(
     http_client: &reqwest::Client,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> Result<i64, SerenyaError> {
     let response = tokio::time::timeout(timeout, async {
         http_client
@@ -751,9 +745,7 @@ impl MetadataProvider for SpotifyProvider {
     }
 }
 
-// ----------------------------------------------------
 // Apple Music Metadata Provider
-// ----------------------------------------------------
 pub struct AppleMusicProvider;
 
 impl AppleMusicProvider {
@@ -781,7 +773,6 @@ impl AppleMusicProvider {
 
         let lookup_url = format!("https://itunes.apple.com/lookup?id={}&entity=song", id_str);
 
-        // 10s Timeout guard
         let response =
             tokio::time::timeout(Duration::from_secs(10), http_client.get(&lookup_url).send())
                 .await
@@ -921,9 +912,7 @@ impl MetadataProvider for AppleMusicProvider {
     }
 }
 
-// ----------------------------------------------------
 // Deezer Metadata Provider
-// ----------------------------------------------------
 pub struct DeezerProvider;
 
 impl DeezerProvider {
@@ -942,7 +931,6 @@ impl DeezerProvider {
                 SerenyaError::Audio("Could not extract ID from Deezer URL".to_owned())
             })?;
 
-        // 1. Try public Deezer API
         let api_url = format!("https://api.deezer.com/track/{}", id_str);
 
         let response_fut = http_client
@@ -953,7 +941,6 @@ impl DeezerProvider {
             )
             .send();
 
-        // 10s Timeout guard
         let response = tokio::time::timeout(Duration::from_secs(10), response_fut).await;
 
         if let Ok(Ok(res)) = response
@@ -981,7 +968,6 @@ impl DeezerProvider {
             });
         }
 
-        // 2. Fallback to HTML scrape
         let scrape_fut = http_client
             .get(url)
             .header(
@@ -1100,9 +1086,7 @@ impl MetadataProvider for DeezerProvider {
     }
 }
 
-// ----------------------------------------------------
 // YouTube Provider (native scraper)
-// ----------------------------------------------------
 pub struct YouTubeProvider;
 
 impl YouTubeProvider {
@@ -1112,11 +1096,9 @@ impl YouTubeProvider {
         user_id: u64,
         http_client: &reqwest::Client,
     ) -> Result<Vec<Track>, SerenyaError> {
-        let (title, thumbnail) =
-            match crate::audio::source::resolve_youtube_oembed(url, http_client).await {
-                Ok(res) => res,
-                Err(_) => ("YouTube Track".to_owned(), None),
-            };
+        let (title, thumbnail) = crate::audio::source::resolve_youtube_oembed(url, http_client)
+            .await
+            .unwrap_or_else(|_| ("YouTube Track".to_owned(), None));
         Ok(vec![Track {
             title,
             url: url.to_owned(),
@@ -1145,7 +1127,6 @@ impl YouTubeProvider {
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
             .send();
 
-        // 10s Timeout guard
         let response = tokio::time::timeout(Duration::from_secs(10), scrape_fut)
             .await
             .map_err(|_| SerenyaError::Audio("YouTube search scrape timeout".to_owned()))?
@@ -1358,15 +1339,13 @@ impl MetadataProvider for YouTubeProvider {
     }
 }
 
-// ----------------------------------------------------
 // YouTube Music Provider (Prefers official/topic tracks)
-// ----------------------------------------------------
 pub struct YouTubeMusicProvider;
 
 #[async_trait]
 impl MetadataProvider for YouTubeMusicProvider {
     fn supports(&self, _input: &str) -> bool {
-        false // URL loading falls back to normal YouTubeProvider
+        false
     }
 
     async fn search(
@@ -1374,7 +1353,6 @@ impl MetadataProvider for YouTubeMusicProvider {
         query: &str,
         http_client: &reqwest::Client,
     ) -> Result<Vec<TrackCandidate>, SerenyaError> {
-        // Search YouTube, but rewrite sources to "YouTube Music" and filter/prefer official audios
         let yt = YouTubeProvider;
         let candidates = yt.search_scrape(query, http_client).await?;
 
@@ -1382,7 +1360,6 @@ impl MetadataProvider for YouTubeMusicProvider {
         for mut c in candidates {
             c.source = "YouTube Music".to_owned();
 
-            // Prefer Official Audio / Topic / VEVO indicators
             let channel_lower = c.artist.to_lowercase();
             let title_lower = c.title.to_lowercase();
             let is_vevo = channel_lower.contains("vevo");
@@ -1399,9 +1376,7 @@ impl MetadataProvider for YouTubeMusicProvider {
     }
 }
 
-// ----------------------------------------------------
 // SoundCloud Provider (using api-v2.soundcloud.com)
-// ----------------------------------------------------
 use std::sync::LazyLock;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
@@ -1432,7 +1407,7 @@ pub struct SoundCloudMedia {
 pub struct SoundCloudTrackMetadata {
     pub id: i64,
     pub title: Option<String>,
-    pub duration: Option<u64>, // milliseconds
+    pub duration: Option<u64>,
     pub permalink_url: Option<String>,
     pub user: Option<SoundCloudTrackUser>,
     pub media: Option<SoundCloudMedia>,
@@ -1454,7 +1429,6 @@ static SOUNDCLOUD_STATE: LazyLock<RwLock<Option<ClientIdState>>> =
 static SOUNDCLOUD_REFRESH_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub async fn get_or_fetch_client_id(http_client: &reqwest::Client) -> Result<String, SerenyaError> {
-    // 1. Read lock check
     {
         let read_guard = SOUNDCLOUD_STATE.read().await;
         if let Some(ref state) = *read_guard
@@ -1464,9 +1438,7 @@ pub async fn get_or_fetch_client_id(http_client: &reqwest::Client) -> Result<Str
         }
     }
 
-    // 2. Write lock check (Double Checked Locking under Mutex)
     let _refresh_permit = SOUNDCLOUD_REFRESH_MUTEX.lock().await;
-    // Check again under Mutex
     {
         let read_guard = SOUNDCLOUD_STATE.read().await;
         if let Some(ref state) = *read_guard
@@ -1760,9 +1732,7 @@ impl SoundCloudProvider {
     }
 }
 
-// ----------------------------------------------------
 // Direct URL Provider (Standard Direct Link resolutions)
-// ----------------------------------------------------
 pub struct DirectUrlProvider;
 
 impl DirectUrlProvider {

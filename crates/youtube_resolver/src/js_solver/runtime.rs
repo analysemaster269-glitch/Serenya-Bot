@@ -1,5 +1,5 @@
 use super::cache::{N_CACHE, get_or_fetch_player_functions, sha1_hash};
-use rquickjs::{Context, Runtime, Function};
+use rquickjs::{Context, Function, Runtime};
 
 pub async fn solve_signature(decipher_js: &str, encrypted_sig: &str) -> Result<String, String> {
     if decipher_js.is_empty() {
@@ -121,8 +121,8 @@ async fn run_js_function(
     label: String,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let runtime = Runtime::new()
-            .map_err(|e| format!("Failed to create QuickJS runtime: {e}"))?;
+        let runtime =
+            Runtime::new().map_err(|e| format!("Failed to create QuickJS runtime: {e}"))?;
         let context = Context::full(&runtime)
             .map_err(|e| format!("Failed to create QuickJS context: {e}"))?;
         context.with(|ctx| {
@@ -130,10 +130,12 @@ async fn run_js_function(
                 .map_err(|e| format!("JS evaluation error during {label} setup: {e}"))?;
             let func_name = js_function_name(&js_source)
                 .ok_or_else(|| format!("Could not determine {label} function name"))?;
-            let func: Function = ctx.globals()
+            let func: Function = ctx
+                .globals()
                 .get(func_name)
                 .map_err(|e| format!("Could not find function {func_name} in globals: {e}"))?;
-            let result: String = func.call((input.as_str(),))
+            let result: String = func
+                .call((input.as_str(),))
                 .map_err(|e| format!("JS execution error during {label} call: {e}"))?;
             Ok(result)
         })

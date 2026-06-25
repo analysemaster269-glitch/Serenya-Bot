@@ -30,7 +30,9 @@ pub async fn add(
     #[autocomplete = "super::autocomplete_playlist"]
     #[description = "Playlist name"]
     name: String,
-    #[description = "Search query or URLs (separated by spaces or commas)"] query: String,
+    #[description = "Search query or URLs (separated by spaces or commas)"]
+    #[rest]
+    query: String,
 ) -> Result<(), Error> {
     let user_id = ctx.author().id.get();
     let db = &ctx.data().database;

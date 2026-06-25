@@ -3,8 +3,8 @@ use crate::audio::providers::{
     SoundCloudProvider, SpotifyProvider, YouTubeMusicProvider, YouTubeProvider,
 };
 use crate::audio::ranking::{
-    TrackCandidate, adjust_single_word_score, contains_unrequested_variant,
-    jaro_winkler_similarity, score_candidates, MetadataConfidence, has_critical_risks,
+    MetadataConfidence, TrackCandidate, adjust_single_word_score, contains_unrequested_variant,
+    has_critical_risks, jaro_winkler_similarity, score_candidates,
 };
 use crate::core::{SourceType, Track};
 use crate::database::DatabaseManager;
@@ -30,7 +30,7 @@ impl ResolvedInput {
                 if tracks.is_empty() {
                     vec![]
                 } else {
-                    vec![tracks.remove(0)] // just the top candidate
+                    vec![tracks.remove(0)]
                 }
             }
         }
@@ -420,11 +420,7 @@ async fn collect_search_results(
             source_type: SourceType::Search,
             resolved_url: None,
             thumbnail: candidate.thumbnail,
-            source_provider: format!(
-                "{} • {:.0}%",
-                candidate.source,
-                score * 100.0
-            ),
+            source_provider: format!("{} • {:.0}%", candidate.source, score * 100.0),
         })
         .collect();
 
@@ -617,7 +613,6 @@ pub async fn resolve_input(
     let query_trimmed = query.trim();
 
     let res = async move {
-        // 1. Check user-owned playlist exact match
         if let Some(playlist) = db.get_user_playlist(user_id, query_trimmed).await {
             let mut tracks = Vec::new();
             for t in playlist.tracks {
@@ -636,7 +631,6 @@ pub async fn resolve_input(
             return Ok(ResolvedInput::Playlist(tracks));
         }
 
-        // 2. Check for Spotify links (playlist/album/artist)
         if query_trimmed.contains("open.spotify.com/playlist/") {
             let config = crate::audio::runtime::spotify_settings();
             let (enabled, limit) = match config {
@@ -648,13 +642,13 @@ pub async fn resolve_input(
                     "Spotify playlist import is disabled in configuration.".into(),
                 ));
             }
-            if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/playlist/") {
+            return if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/playlist/") {
                 let tracks = resolve_spotify_playlist(&id, limit, user_id, http_client).await?;
-                return Ok(ResolvedInput::Playlist(tracks));
+                Ok(ResolvedInput::Playlist(tracks))
             } else {
-                return Err(SerenyaError::Audio(
+                Err(SerenyaError::Audio(
                     "Failed to extract Spotify playlist ID.".into(),
-                ));
+                ))
             }
         }
 
@@ -669,13 +663,13 @@ pub async fn resolve_input(
                     "Spotify album import is disabled in configuration.".into(),
                 ));
             }
-            if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/album/") {
+            return if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/album/") {
                 let tracks = resolve_spotify_album(&id, limit, user_id, http_client).await?;
-                return Ok(ResolvedInput::Playlist(tracks));
+                Ok(ResolvedInput::Playlist(tracks))
             } else {
-                return Err(SerenyaError::Audio(
+                Err(SerenyaError::Audio(
                     "Failed to extract Spotify album ID.".into(),
-                ));
+                ))
             }
         }
 
@@ -690,18 +684,17 @@ pub async fn resolve_input(
                     "Spotify artist top tracks import is disabled in configuration.".into(),
                 ));
             }
-            if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/artist/") {
+            return if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/artist/") {
                 let tracks =
                     resolve_spotify_artist_top_tracks(&id, limit, user_id, http_client).await?;
-                return Ok(ResolvedInput::Playlist(tracks));
+                Ok(ResolvedInput::Playlist(tracks))
             } else {
-                return Err(SerenyaError::Audio(
+                Err(SerenyaError::Audio(
                     "Failed to extract Spotify artist ID.".into(),
-                ));
+                ))
             }
         }
 
-        // 3. Check Cache
         if query_trimmed.starts_with("http://") || query_trimmed.starts_with("https://") {
             if let Some(mut cached_track) =
                 crate::audio::source::cache_get_url_metadata(query_trimmed).await
@@ -720,7 +713,6 @@ pub async fn resolve_input(
 
         tracing::debug!(query = %query_trimmed, cache = "miss", "cache_miss");
 
-        // Instantiate providers
         let spotify_provider = SpotifyProvider;
         let apple_provider = AppleMusicProvider;
         let deezer_provider = DeezerProvider;
@@ -728,7 +720,6 @@ pub async fn resolve_input(
         let soundcloud_provider = SoundCloudProvider;
         let direct_provider = DirectUrlProvider;
 
-        // 4. Resolve metadata or play directly
         if spotify_provider.supports(query_trimmed) {
             let meta =
                 if let Some(track_id) = extract_spotify_id(query_trimmed, "spotify.com/track/") {
@@ -982,7 +973,7 @@ fn evaluate_confidence_and_respond(
         .as_deref()
         .map(|title| format!("{original_query} {title}"))
         .unwrap_or_else(|| original_query.to_owned());
-    
+
     let has_critical = has_critical_risks(
         top_cand,
         original_query,
@@ -991,7 +982,8 @@ fn evaluate_confidence_and_respond(
         MetadataConfidence::Trusted,
     );
 
-    let variant_conflict = contains_unrequested_variant(&top_cand.title, &variant_context) || has_critical;
+    let variant_conflict =
+        contains_unrequested_variant(&top_cand.title, &variant_context) || has_critical;
 
     let mut low_confidence = *top_score < settings.auto_pick_threshold || variant_conflict;
 
@@ -1029,11 +1021,7 @@ fn evaluate_confidence_and_respond(
                 source_type: SourceType::Search,
                 resolved_url: None,
                 thumbnail: forced_thumbnail.clone().or(cand.thumbnail),
-                source_provider: format!(
-                    "{} • {:.0}%",
-                    cand.source,
-                    score * 100.0
-                ),
+                source_provider: format!("{} • {:.0}%", cand.source, score * 100.0),
             });
         }
         Ok(ResolvedInput::SearchResults(tracks))
@@ -1241,7 +1229,6 @@ async fn resolve_spotify_embed_fallback(
     let mut tracks = Vec::new();
     for embed_track in track_list.into_iter().take(limit) {
         if embed_track.uri.starts_with("spotify:track:") {
-            // Build a display title including artist (subtitle) for better identification
             let display_title = embed_track.title.clone();
 
             // Use YouTube search instead of Spotify URL — Spotify URLs are DRM-protected
@@ -1385,7 +1372,9 @@ async fn spotify_partner_post(
     })?;
 
     let body = response.json::<serde_json::Value>().await.map_err(|e| {
-        SerenyaError::Audio(format!("Failed to parse Spotify Partner API JSON response: {e}"))
+        SerenyaError::Audio(format!(
+            "Failed to parse Spotify Partner API JSON response: {e}"
+        ))
     })?;
 
     if let Some(errors) = body.get("errors").and_then(|e| e.as_array())
@@ -1671,7 +1660,6 @@ async fn resolve_spotify_album_api(
             ));
         }
 
-        // Extract thumbnail at album level
         let thumbnail = album_val
             .pointer("/coverArt/sources")
             .or_else(|| album_val.pointer("/images"))
@@ -2254,7 +2242,7 @@ fn recursive_find_tracks(
                         .as_array()
                         .and_then(|arr| arr.first())
                         .and_then(|t| t["url"].as_str())
-                        .map(|url| std::sync::Arc::from(url)),
+                        .map(std::sync::Arc::from),
                     source_provider: provider_name.to_owned(),
                 });
             }
@@ -2295,39 +2283,47 @@ async fn resolve_youtube_playlist(
 
     let is_album = url.contains("list=OLAK") || url.contains("OLAK5uy_");
 
-    if !is_album {
-        if let Ok(mut playlist) = rusty_ytdl::search::Playlist::get(&playlist_url, None).await {
-            playlist.fetch(Some(limit as u64)).await;
+    if !is_album
+        && let Ok(mut playlist) = rusty_ytdl::search::Playlist::get(&playlist_url, None).await
+    {
+        playlist.fetch(Some(limit as u64)).await;
 
-            let is_fake_video = playlist.videos.len() == 1 && playlist.videos.first().map(|v| v.title == "Videos").unwrap_or(false);
-            let mut valid_videos = Vec::new();
-            if !is_fake_video {
-                for video in playlist.videos {
-                    valid_videos.push(video);
-                }
+        let is_fake_video = playlist.videos.len() == 1
+            && playlist
+                .videos
+                .first()
+                .map(|v| v.title == "Videos")
+                .unwrap_or(false);
+        let mut valid_videos = Vec::new();
+        if !is_fake_video {
+            for video in playlist.videos {
+                valid_videos.push(video);
             }
+        }
 
-            if !valid_videos.is_empty() {
-                is_valid_playlist = true;
-                for video in valid_videos {
-                    let duration = if video.duration > 0 {
-                        Some(Duration::from_millis(video.duration))
-                    } else {
-                        None
-                    };
+        if !valid_videos.is_empty() {
+            is_valid_playlist = true;
+            for video in valid_videos {
+                let duration = if video.duration > 0 {
+                    Some(Duration::from_millis(video.duration))
+                } else {
+                    None
+                };
 
-                    tracks.push(Track {
-                        title: video.title,
-                        url: video.url,
-                        duration,
-                        requester_id: serenity::UserId::new(user_id),
-                        requester_name: None,
-                        source_type: SourceType::Playlist,
-                        resolved_url: None,
-                        thumbnail: video.thumbnails.first().map(|t| std::sync::Arc::from(t.url.as_str())),
-                        source_provider: provider_name.clone(),
-                    });
-                }
+                tracks.push(Track {
+                    title: video.title,
+                    url: video.url,
+                    duration,
+                    requester_id: serenity::UserId::new(user_id),
+                    requester_name: None,
+                    source_type: SourceType::Playlist,
+                    resolved_url: None,
+                    thumbnail: video
+                        .thumbnails
+                        .first()
+                        .map(|t| std::sync::Arc::from(t.url.as_str())),
+                    source_provider: provider_name.clone(),
+                });
             }
         }
     }
@@ -2344,33 +2340,40 @@ async fn resolve_youtube_playlist(
             "SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgOmgpwY".parse().unwrap(),
         );
 
-        if let Ok(res) = http_client.get(&normalized_url)
+        if let Ok(res) = http_client
+            .get(&normalized_url)
             .headers(headers)
             .send()
             .await
+            && let Ok(html) = res.text().await
+            && let Some(start) = html.find("ytInitialData = {")
         {
-            if let Ok(html) = res.text().await {
-                if let Some(start) = html.find("ytInitialData = {") {
-                    let json_str = &html[start + 16..];
-                    if let Some(end) = json_str.find("};</script>") {
-                        let json_data = &json_str[..=end];
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_data) {
-                            let mut seen_ids = std::collections::HashSet::new();
-                            recursive_find_tracks(&v, &mut tracks, &mut seen_ids, limit, user_id, &provider_name);
-                        }
-                    }
+            let json_str = &html[start + 16..];
+            if let Some(end) = json_str.find("};</script>") {
+                let json_data = &json_str[..=end];
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_data) {
+                    let mut seen_ids = std::collections::HashSet::new();
+                    recursive_find_tracks(
+                        &v,
+                        &mut tracks,
+                        &mut seen_ids,
+                        limit,
+                        user_id,
+                        &provider_name,
+                    );
                 }
             }
         }
     }
 
     if tracks.is_empty() {
-        return Err(SerenyaError::Audio("Failed to retrieve YouTube playlist tracks".into()));
+        return Err(SerenyaError::Audio(
+            "Failed to retrieve YouTube playlist tracks".into(),
+        ));
     }
 
     Ok(tracks)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2459,11 +2462,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_live_youtube_album_resolution() {
-        let url = "https://music.youtube.com/playlist?list=OLAK5uy_nvYrn-HvzbwuVef3BcLzl70t41Warfbpw";
+        let url =
+            "https://music.youtube.com/playlist?list=OLAK5uy_nvYrn-HvzbwuVef3BcLzl70t41Warfbpw";
         let http_client = reqwest::Client::new();
-        let tracks = resolve_youtube_playlist(url, 10, 12345, &http_client).await.expect("Failed to resolve live album playlist");
+        let tracks = resolve_youtube_playlist(url, 10, 12345, &http_client)
+            .await
+            .expect("Failed to resolve live album playlist");
         assert!(!tracks.is_empty(), "Resolved tracks list is empty");
-        assert!(tracks[0].title.contains("SỢ HẠNH PHÚC QUÁ NGẮN") || tracks[0].title.contains("Sợ Hạnh Phúc Quá Ngắn") || tracks[0].title.to_lowercase().contains("hạnh phúc"), "Unexpected title: {}", tracks[0].title);
+        assert!(
+            tracks[0].title.contains("SỢ HẠNH PHÚC QUÁ NGẮN")
+                || tracks[0].title.contains("Sợ Hạnh Phúc Quá Ngắn")
+                || tracks[0].title.to_lowercase().contains("hạnh phúc"),
+            "Unexpected title: {}",
+            tracks[0].title
+        );
         assert_eq!(tracks[0].url, "https://www.youtube.com/watch?v=ns878yW7N2c");
         assert_eq!(tracks[0].source_provider, "YouTube Music");
     }
@@ -2569,7 +2581,11 @@ mod tests {
             return Ok(());
         }
         let config = crate::config::load_config("config.yml").await?;
-        crate::audio::runtime::configure(&config.resolver, &config.spotify, config.playback.max_playlist_import);
+        crate::audio::runtime::configure(
+            &config.resolver,
+            &config.spotify,
+            config.playback.max_playlist_import,
+        );
 
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
@@ -2590,7 +2606,8 @@ mod tests {
             );
 
             let stream =
-                crate::audio::source::extract_stream_url_for_guild(9_001, &track.url, &http_client).await?;
+                crate::audio::source::extract_stream_url_for_guild(9_001, &track.url, &http_client)
+                    .await?;
             assert!(
                 stream.url.contains("googlevideo.com")
                     || stream.url.contains("googleusercontent.com"),
@@ -2625,7 +2642,11 @@ mod tests {
             return Ok(());
         }
         let config = crate::config::load_config("config.yml").await?;
-        crate::audio::runtime::configure(&config.resolver, &config.spotify, config.playback.max_playlist_import);
+        crate::audio::runtime::configure(
+            &config.resolver,
+            &config.spotify,
+            config.playback.max_playlist_import,
+        );
 
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))

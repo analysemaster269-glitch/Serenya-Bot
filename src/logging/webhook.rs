@@ -30,7 +30,8 @@ impl Visit for MessageVisitor {
 
 use std::sync::Mutex;
 
-static SHUTDOWN_TX: Mutex<Option<tokio::sync::oneshot::Sender<tokio::sync::oneshot::Sender<()>>>> = Mutex::new(None);
+static SHUTDOWN_TX: Mutex<Option<tokio::sync::oneshot::Sender<tokio::sync::oneshot::Sender<()>>>> =
+    Mutex::new(None);
 
 pub async fn shutdown() {
     if let Some(shutdown_tx) = SHUTDOWN_TX.lock().ok().and_then(|mut guard| guard.take()) {

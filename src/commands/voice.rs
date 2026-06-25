@@ -8,7 +8,6 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
         .guild_id()
         .ok_or_else(|| SerenyaError::Config("This command can only be used in a server.".into()))?;
 
-    // Find user's voice channel
     let channel_id = {
         let guild = ctx
             .guild()
@@ -32,7 +31,6 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
     tracing::info!("Voice connect complete: channel {:?}", channel_id);
     let _ = crate::audio::quality::apply_bitrate(ctx, guild_id, channel_id).await;
 
-    // Get or create guild player
     let player_lock = ctx
         .data()
         .guild_players

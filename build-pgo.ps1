@@ -18,6 +18,23 @@ $MERGED_PROFDATA = Join-Path $PGO_DIR "merged.profdata"
 $Env:CARGO_TERM_PROGRESS_WHEN = "always"
 $Env:CARGO_TERM_PROGRESS_WIDTH = "100"
 
+# Find and add patch.exe to Path if it's not already available
+if (-not (Get-Command patch -ErrorAction SilentlyContinue)) {
+    $GitPaths = @(
+        "C:\Program Files\Git\usr\bin",
+        "C:\Program Files (x86)\Git\usr\bin",
+        "$Env:LocalAppData\Programs\Git\usr\bin",
+        "$Env:UserProfile\scoop\apps\git\current\usr\bin"
+    )
+    foreach ($GitPath in $GitPaths) {
+        if (Test-Path (Join-Path $GitPath "patch.exe")) {
+            $Env:Path = "$Env:Path;$GitPath"
+            Write-Host "Temporarily added $GitPath to PATH to provide 'patch' utility." -ForegroundColor Gray
+            break
+        }
+    }
+}
+
 # 1. Clean previous profile data
 Write-Host "Step 1: Cleaning previous profile data in target/pgo-data..." -ForegroundColor Green
 if (Test-Path $PGO_DIR) {

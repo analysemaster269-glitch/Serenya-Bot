@@ -85,7 +85,9 @@ pub fn spotify_settings() -> Option<Arc<crate::config::SpotifySection>> {
 }
 
 pub fn max_playlist_import() -> usize {
-    RESOLVER_RUNTIME.max_playlist_import.load(std::sync::atomic::Ordering::Relaxed)
+    RESOLVER_RUNTIME
+        .max_playlist_import
+        .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn duration_from_millis(ms: u64) -> Duration {
