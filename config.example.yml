@@ -53,6 +53,8 @@ resolver:
   negative_cache_ttl_seconds: 1800
   auto_pick_threshold: 0.90
   perfect_threshold: 0.97
+  enable_ytdlp_youtube_fallback: false
+  enable_spotify_embed_fallback: true
 
 emojis:
   spotify: "<:spotify:123456789>"

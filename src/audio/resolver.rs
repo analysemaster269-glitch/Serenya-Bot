@@ -1564,7 +1564,13 @@ async fn resolve_spotify_playlist(
         playlist_id,
         limit
     );
+    let settings = crate::audio::runtime::settings();
     if playlist_id.starts_with("37i9dQZF") {
+        if !settings.enable_spotify_embed_fallback {
+            return Err(SerenyaError::Audio(
+                "Spotify embed fallback is disabled (required for Spotify-curated playlist)".into(),
+            ));
+        }
         tracing::debug!(
             "Playlist {} is Spotify-curated. Bypassing Partner API and using embed scraper fallback directly.",
             playlist_id
@@ -1590,6 +1596,9 @@ async fn resolve_spotify_playlist(
                     return Ok(tracks);
                 }
                 Err(err) => {
+                    if !settings.enable_spotify_embed_fallback {
+                        return Err(err);
+                    }
                     tracing::warn!(
                         "Spotify Web API playlist resolution failed ({:?}). Falling back to Spotify embed scraper...",
                         err
@@ -1597,11 +1606,21 @@ async fn resolve_spotify_playlist(
                 }
             }
         } else {
+            if !settings.enable_spotify_embed_fallback {
+                return Err(SerenyaError::Audio(
+                    "Spotify sp_dc cookie missing in config and embed fallback is disabled".into(),
+                ));
+            }
             tracing::warn!(
                 "Spotify sp_dc cookie missing in config. Falling back to Spotify embed scraper."
             );
         }
     } else {
+        if !settings.enable_spotify_embed_fallback {
+            return Err(SerenyaError::Audio(
+                "Spotify settings missing in config and embed fallback is disabled".into(),
+            ));
+        }
         tracing::warn!(
             "Spotify settings missing in config. Falling back to Spotify embed scraper."
         );
@@ -1763,6 +1782,7 @@ async fn resolve_spotify_album(
         album_id,
         limit
     );
+    let settings = crate::audio::runtime::settings();
     if let Some(config) = crate::audio::runtime::spotify_settings() {
         if config
             .sp_dc
@@ -1782,6 +1802,9 @@ async fn resolve_spotify_album(
                     return Ok(tracks);
                 }
                 Err(err) => {
+                    if !settings.enable_spotify_embed_fallback {
+                        return Err(err);
+                    }
                     tracing::warn!(
                         "Spotify Web API album resolution failed ({:?}). Falling back to Spotify embed scraper...",
                         err
@@ -1789,11 +1812,21 @@ async fn resolve_spotify_album(
                 }
             }
         } else {
+            if !settings.enable_spotify_embed_fallback {
+                return Err(SerenyaError::Audio(
+                    "Spotify sp_dc cookie missing in config and embed fallback is disabled".into(),
+                ));
+            }
             tracing::warn!(
                 "Spotify sp_dc cookie missing in config. Falling back to Spotify embed scraper."
             );
         }
     } else {
+        if !settings.enable_spotify_embed_fallback {
+            return Err(SerenyaError::Audio(
+                "Spotify settings missing in config and embed fallback is disabled".into(),
+            ));
+        }
         tracing::warn!(
             "Spotify settings missing in config. Falling back to Spotify embed scraper."
         );
@@ -1936,6 +1969,7 @@ async fn resolve_spotify_artist_top_tracks(
         artist_id,
         limit
     );
+    let settings = crate::audio::runtime::settings();
     if let Some(config) = crate::audio::runtime::spotify_settings() {
         if config
             .sp_dc
@@ -1957,6 +1991,9 @@ async fn resolve_spotify_artist_top_tracks(
                     return Ok(tracks);
                 }
                 Err(err) => {
+                    if !settings.enable_spotify_embed_fallback {
+                        return Err(err);
+                    }
                     tracing::warn!(
                         "Spotify Web API artist top tracks resolution failed ({:?}). Falling back to Spotify embed scraper...",
                         err
@@ -1964,11 +2001,21 @@ async fn resolve_spotify_artist_top_tracks(
                 }
             }
         } else {
+            if !settings.enable_spotify_embed_fallback {
+                return Err(SerenyaError::Audio(
+                    "Spotify sp_dc cookie missing in config and embed fallback is disabled".into(),
+                ));
+            }
             tracing::warn!(
                 "Spotify sp_dc cookie missing in config. Falling back to Spotify embed scraper."
             );
         }
     } else {
+        if !settings.enable_spotify_embed_fallback {
+            return Err(SerenyaError::Audio(
+                "Spotify settings missing in config and embed fallback is disabled".into(),
+            ));
+        }
         tracing::warn!(
             "Spotify settings missing in config. Falling back to Spotify embed scraper."
         );

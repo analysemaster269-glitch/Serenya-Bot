@@ -93,6 +93,8 @@ pub struct ResolverSection {
     pub negative_cache_ttl_seconds: u64,
     pub auto_pick_threshold: f64,
     pub perfect_threshold: f64,
+    pub enable_ytdlp_youtube_fallback: bool,
+    pub enable_spotify_embed_fallback: bool,
 }
 
 impl Default for ResolverSection {
@@ -118,6 +120,8 @@ impl Default for ResolverSection {
             negative_cache_ttl_seconds: 1800,
             auto_pick_threshold: 0.90,
             perfect_threshold: 0.97,
+            enable_ytdlp_youtube_fallback: false,
+            enable_spotify_embed_fallback: true,
         }
     }
 }
