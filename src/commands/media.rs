@@ -12,10 +12,7 @@ struct LrcResult {
     plain_lyrics: Option<String>,
 }
 
-fn score_lyric_results(
-    results: Vec<LrcResult>,
-    query_str: &str,
-) -> Option<LrcResult> {
+fn score_lyric_results(results: Vec<LrcResult>, query_str: &str) -> Option<LrcResult> {
     // Normalize and clean query
     let mut clean_query = crate::audio::ranking::clean_title(query_str);
     clean_query = clean_query.replace(" | ", " - ").replace(" by ", " - ");
@@ -41,8 +38,10 @@ fn score_lyric_results(
                 let right_norm = crate::audio::ranking::normalize_string(parts[1].trim());
 
                 // Scenario 1: Left is Title, Right is Artist
-                let mut title_sim_1 = crate::audio::ranking::jaro_winkler_similarity(&r_track_norm, &left_norm);
-                let mut artist_sim_1 = crate::audio::ranking::jaro_winkler_similarity(&r_artist_norm, &right_norm);
+                let mut title_sim_1 =
+                    crate::audio::ranking::jaro_winkler_similarity(&r_track_norm, &left_norm);
+                let mut artist_sim_1 =
+                    crate::audio::ranking::jaro_winkler_similarity(&r_artist_norm, &right_norm);
                 if left_norm.contains(&r_track_norm) || r_track_norm.contains(&left_norm) {
                     title_sim_1 = title_sim_1.max(0.95);
                 }
@@ -52,8 +51,10 @@ fn score_lyric_results(
                 let score_1 = title_sim_1 * 0.6 + artist_sim_1 * 0.4;
 
                 // Scenario 2: Left is Artist, Right is Title
-                let mut title_sim_2 = crate::audio::ranking::jaro_winkler_similarity(&r_track_norm, &right_norm);
-                let mut artist_sim_2 = crate::audio::ranking::jaro_winkler_similarity(&r_artist_norm, &left_norm);
+                let mut title_sim_2 =
+                    crate::audio::ranking::jaro_winkler_similarity(&r_track_norm, &right_norm);
+                let mut artist_sim_2 =
+                    crate::audio::ranking::jaro_winkler_similarity(&r_artist_norm, &left_norm);
                 if right_norm.contains(&r_track_norm) || r_track_norm.contains(&right_norm) {
                     title_sim_2 = title_sim_2.max(0.95);
                 }
@@ -72,15 +73,17 @@ fn score_lyric_results(
                     split_score
                 }
             } else {
-                let mut title_sim = crate::audio::ranking::jaro_winkler_similarity(&r_track_norm, &query_norm);
+                let mut title_sim =
+                    crate::audio::ranking::jaro_winkler_similarity(&r_track_norm, &query_norm);
                 if query_norm.contains(&r_track_norm) || r_track_norm.contains(&query_norm) {
                     title_sim = title_sim.max(0.95);
                 }
-                let artist_bonus = if !r_artist_norm.is_empty() && query_norm.contains(&r_artist_norm) {
-                    0.20
-                } else {
-                    0.0
-                };
+                let artist_bonus =
+                    if !r_artist_norm.is_empty() && query_norm.contains(&r_artist_norm) {
+                        0.20
+                    } else {
+                        0.0
+                    };
                 title_sim * 0.8 + artist_bonus
             };
 
@@ -331,15 +334,16 @@ mod tests {
 
     #[test]
     fn test_lyric_artist_mismatch_rejected() {
-        let results = vec![
-            LrcResult {
-                track_name: "Nếu mai mình chia tay".to_string(),
-                artist_name: "Kaisoul".to_string(),
-                plain_lyrics: Some(" lyrics kaisoul ".to_string()),
-            },
-        ];
+        let results = vec![LrcResult {
+            track_name: "Nếu mai mình chia tay".to_string(),
+            artist_name: "Kaisoul".to_string(),
+            plain_lyrics: Some(" lyrics kaisoul ".to_string()),
+        }];
 
         let matched = score_lyric_results(results, "Nếu Mai Chia Tay - Monstar");
-        assert!(matched.is_none(), "Should reject Kaisoul lyrics when Monstar was requested");
+        assert!(
+            matched.is_none(),
+            "Should reject Kaisoul lyrics when Monstar was requested"
+        );
     }
 }

@@ -94,8 +94,8 @@ pub async fn info(
         .tracks
         .iter()
         .map(|t| crate::core::Track {
-            title: t.title.clone(),
-            url: t.url.clone(),
+            title: t.title.as_str().into(),
+            url: t.url.as_str().into(),
             duration: t.duration_secs.map(Duration::from_secs),
             requester_id: serenity::UserId::new(user_id),
             requester_name: Some(req_name.clone()),

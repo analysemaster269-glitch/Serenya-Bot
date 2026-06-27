@@ -119,17 +119,20 @@ pub async fn apply_bitrate(
         .clone();
 
     if let Some(call_lock) = manager.get(guild_id) {
-        let mut call = call_lock.lock().await;
-        if quality_mode == Quality::Auto {
+        let ch_bitrate = if quality_mode == Quality::Auto {
             if let Ok(serenity::Channel::Guild(channel)) =
                 vc_id.to_channel(&ctx.serenity_context().http).await
             {
-                let ch_bitrate = channel.bitrate.unwrap_or(64_000);
-                call.set_bitrate(songbird::driver::Bitrate::Bits(ch_bitrate as i32));
+                channel.bitrate.unwrap_or(64_000)
+            } else {
+                64_000
             }
         } else {
-            call.set_bitrate(songbird::driver::Bitrate::Bits(target_bitrate as i32));
-        }
+            target_bitrate
+        };
+
+        let mut call = call_lock.lock().await;
+        call.set_bitrate(songbird::driver::Bitrate::Bits(ch_bitrate as i32));
     }
     Ok(())
 }

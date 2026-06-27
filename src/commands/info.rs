@@ -23,11 +23,19 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
 
-    let player = player_lock.read().await;
+    let (now_playing, current_track_handle, seek_offset) = {
+        let player = player_lock.read().await;
+        (
+            player.now_playing.clone(),
+            player.current_track_handle.clone(),
+            player.seek_offset,
+        )
+    };
 
-    let track = match player.now_playing.as_ref() {
+    let track = match now_playing {
         Some(t) => t,
         None => {
             ctx.say("Nothing is currently playing.").await?;
@@ -35,16 +43,16 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
         }
     };
 
-    let elapsed = if let Some(ref handle) = player.current_track_handle {
+    let elapsed = if let Some(ref handle) = current_track_handle {
         match handle.get_info().await {
-            Ok(info) => player.seek_offset + info.position,
+            Ok(info) => seek_offset + info.position,
             Err(_) => Duration::from_secs(0),
         }
     } else {
         Duration::from_secs(0)
     };
 
-    let embed = now_playing_embed(track, elapsed, None, &ctx.data().config());
+    let embed = now_playing_embed(&track, elapsed, None, &ctx.data().config());
     let reply = poise::CreateReply::default().embed(embed);
     ctx.send(reply).await?;
     Ok(())

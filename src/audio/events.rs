@@ -690,13 +690,12 @@ pub async fn trigger_prefetch_with_context(
                 return;
             }
             let mut player = player_lock.write().await;
-            if player.prefetch_generation == generation {
-                if let Some(track) = player.queue.get_mut(0)
-                    && track.url == url_to_resolve
-                {
-                    track.resolved_url = Some(Arc::new(resolved_url));
-                    tracing::debug!(guild_id = %guild_id, "Prefetch successful for: {}", track.title);
-                }
+            if player.prefetch_generation == generation
+                && let Some(track) = player.queue.get_mut(0)
+                && track.url == url_to_resolve
+            {
+                track.resolved_url = Some(Arc::new(resolved_url));
+                tracing::debug!(guild_id = %guild_id, "Prefetch successful for: {}", track.title);
             }
         }
         Ok(None) => {}
@@ -745,6 +744,7 @@ pub fn schedule_prefetch(
             }
         }
 
-        trigger_prefetch_with_context(guild_id, gp_clone, http_client_clone, token, generation).await;
+        trigger_prefetch_with_context(guild_id, gp_clone, http_client_clone, token, generation)
+            .await;
     });
 }

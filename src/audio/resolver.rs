@@ -2187,7 +2187,13 @@ pub async fn resolve_ytsearch_track(
         let query_lyrics = format!("{} lyrics", query);
         let (normal_res, lyrics_res) = tokio::join!(
             perform_parallel_search(&query, &track.title, None, track.duration, http_client),
-            perform_parallel_search(&query_lyrics, &track.title, None, track.duration, http_client)
+            perform_parallel_search(
+                &query_lyrics,
+                &track.title,
+                None,
+                track.duration,
+                http_client
+            )
         );
         let mut combined = normal_res?;
         if let Ok(mut l_res) = lyrics_res {
@@ -2391,49 +2397,51 @@ async fn resolve_youtube_playlist(
             }),
             fetch_all: false,
         };
-        if let Ok(mut playlist) = rusty_ytdl::search::Playlist::get(&playlist_url, Some(&playlist_opts)).await {
-        playlist.fetch(Some(limit as u64)).await;
+        if let Ok(mut playlist) =
+            rusty_ytdl::search::Playlist::get(&playlist_url, Some(&playlist_opts)).await
+        {
+            playlist.fetch(Some(limit as u64)).await;
 
-        let is_fake_video = playlist.videos.len() == 1
-            && playlist
-                .videos
-                .first()
-                .map(|v| v.title == "Videos")
-                .unwrap_or(false);
-        let mut valid_videos = Vec::new();
-        if !is_fake_video {
-            for video in playlist.videos {
-                valid_videos.push(video);
+            let is_fake_video = playlist.videos.len() == 1
+                && playlist
+                    .videos
+                    .first()
+                    .map(|v| v.title == "Videos")
+                    .unwrap_or(false);
+            let mut valid_videos = Vec::new();
+            if !is_fake_video {
+                for video in playlist.videos {
+                    valid_videos.push(video);
+                }
             }
-        }
 
-        if !valid_videos.is_empty() {
-            is_valid_playlist = true;
-            for video in valid_videos {
-                let duration = if video.duration > 0 {
-                    Some(Duration::from_millis(video.duration))
-                } else {
-                    None
-                };
+            if !valid_videos.is_empty() {
+                is_valid_playlist = true;
+                for video in valid_videos {
+                    let duration = if video.duration > 0 {
+                        Some(Duration::from_millis(video.duration))
+                    } else {
+                        None
+                    };
 
-                tracks.push(Track {
-                    title: video.title.into(),
-                    url: video.url.into(),
-                    duration,
-                    requester_id: serenity::UserId::new(user_id),
-                    requester_name: None,
-                    source_type: SourceType::Playlist,
-                    resolved_url: None,
-                    thumbnail: video
-                        .thumbnails
-                        .first()
-                        .map(|t| std::sync::Arc::from(t.url.as_str())),
-                    source_provider: provider_name.clone(),
-                });
+                    tracks.push(Track {
+                        title: video.title.into(),
+                        url: video.url.into(),
+                        duration,
+                        requester_id: serenity::UserId::new(user_id),
+                        requester_name: None,
+                        source_type: SourceType::Playlist,
+                        resolved_url: None,
+                        thumbnail: video
+                            .thumbnails
+                            .first()
+                            .map(|t| std::sync::Arc::from(t.url.as_str())),
+                        source_provider: provider_name.clone(),
+                    });
+                }
             }
         }
     }
-}
 
     // Fallback/Scraper for Album playlists (OLAK...) or failed playlist resolutions
     if !is_valid_playlist {

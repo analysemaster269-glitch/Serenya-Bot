@@ -4,7 +4,7 @@ pub async fn resolve_best_audio_stream_rusty_ytdl(
     video_id: &str,
     context: &ResolveContext,
 ) -> Result<ResolvedStream, ResolveError> {
-    use rusty_ytdl::{Video, VideoOptions, VideoQuality, VideoSearchOptions, RequestOptions};
+    use rusty_ytdl::{RequestOptions, Video, VideoOptions, VideoQuality, VideoSearchOptions};
 
     let opts = VideoOptions {
         quality: VideoQuality::HighestAudio,

@@ -60,7 +60,6 @@ pub struct ParsedQueryContext {
     pub requested_variant: Option<RequestedVariantType>,
 }
 
-
 #[derive(Debug, Clone, Copy)]
 struct VariantRule {
     term: &'static str,
@@ -527,7 +526,11 @@ pub fn jaro_winkler_similarity(s1: &str, s2: &str) -> f64 {
     strsim::jaro_winkler(&normalize_string(s1), &normalize_string(s2))
 }
 
-pub fn extract_remixer(text: &str, expected_title: &str, expected_artist: Option<&str>) -> Option<String> {
+pub fn extract_remixer(
+    text: &str,
+    expected_title: &str,
+    expected_artist: Option<&str>,
+) -> Option<String> {
     let text_lower = text.to_lowercase();
     let artist_lower = expected_artist.map(|a| a.to_lowercase());
     let exp_title_lower = expected_title.to_lowercase();
@@ -541,7 +544,7 @@ pub fn extract_remixer(text: &str, expected_title: &str, expected_artist: Option
                 remixer = remixer.replace(art, "");
             }
             remixer = remixer.replace(&exp_title_lower, "");
-            
+
             let cleaned = remixer.trim().to_owned();
             if !cleaned.is_empty() && cleaned.split_whitespace().count() <= 4 {
                 return Some(cleaned);
@@ -557,19 +560,26 @@ pub fn extract_remixer(text: &str, expected_title: &str, expected_artist: Option
             inline_part = inline_part.replace(&exp_title_lower, "");
         }
         // Strip expected artist
-        if let Some(ref art) = artist_lower {
-            if !art.is_empty() && inline_part.contains(art) {
-                inline_part = inline_part.replace(art, "");
-            }
+        if let Some(ref art) = artist_lower
+            && !art.is_empty()
+            && inline_part.contains(art)
+        {
+            inline_part = inline_part.replace(art, "");
         }
         inline_part = inline_part.replace("remix", "");
-        
+
         // Clean symbols
         let cleaned_inline: String = inline_part
             .chars()
-            .map(|c| if c.is_alphanumeric() || c.is_whitespace() { c } else { ' ' })
+            .map(|c| {
+                if c.is_alphanumeric() || c.is_whitespace() {
+                    c
+                } else {
+                    ' '
+                }
+            })
             .collect();
-        
+
         let remixer = cleaned_inline.trim().to_owned();
         if !remixer.is_empty() && remixer.split_whitespace().count() <= 4 {
             return Some(remixer);
@@ -593,7 +603,7 @@ pub fn parse_query_context(
 
     // 2. requested_variant
     let mut requested_variant = None;
-    
+
     // Check in query or expected_title (stripped of artist name to prevent "Clean Bandit" issues)
     let check_text = format!("{} {}", query_lower, expected_title_lower);
     let check_text = if let Some(ref art) = artist_lower {
@@ -610,7 +620,10 @@ pub fn parse_query_context(
         requested_variant = Some(RequestedVariantType::Remix);
     } else if contains_word(&check_text, "cover") || contains_word(&check_text, "piano") {
         requested_variant = Some(RequestedVariantType::Cover);
-    } else if contains_word(&check_text, "live") || contains_word(&check_text, "concert") || contains_word(&check_text, "performance") {
+    } else if contains_word(&check_text, "live")
+        || contains_word(&check_text, "concert")
+        || contains_word(&check_text, "performance")
+    {
         requested_variant = Some(RequestedVariantType::Live);
     } else if contains_word(&check_text, "acoustic") {
         requested_variant = Some(RequestedVariantType::Acoustic);
@@ -618,9 +631,15 @@ pub fn parse_query_context(
         requested_variant = Some(RequestedVariantType::Instrumental);
     } else if contains_word(&check_text, "karaoke") {
         requested_variant = Some(RequestedVariantType::Karaoke);
-    } else if contains_word(&check_text, "slowed") || check_text.contains("slowed+reverb") || check_text.contains("slowed + reverb") {
+    } else if contains_word(&check_text, "slowed")
+        || check_text.contains("slowed+reverb")
+        || check_text.contains("slowed + reverb")
+    {
         requested_variant = Some(RequestedVariantType::SlowedReverb);
-    } else if contains_word(&check_text, "sped up") || contains_word(&check_text, "sped-up") || contains_word(&check_text, "speed up") {
+    } else if contains_word(&check_text, "sped up")
+        || contains_word(&check_text, "sped-up")
+        || contains_word(&check_text, "speed up")
+    {
         requested_variant = Some(RequestedVariantType::SpedUp);
     } else if contains_word(&check_text, "nightcore") {
         requested_variant = Some(RequestedVariantType::Nightcore);
@@ -712,10 +731,7 @@ fn classify_media_type_v2(title: &str, artist: &str, is_topic: bool) -> MediaTyp
     MediaType::Unknown
 }
 
-fn score_remixer_alignment(
-    candidate: &TrackCandidate,
-    ctx: &ParsedQueryContext,
-) -> f64 {
+fn score_remixer_alignment(candidate: &TrackCandidate, ctx: &ParsedQueryContext) -> f64 {
     let Some(ref remixer) = ctx.remixer else {
         return 0.0;
     };
@@ -724,30 +740,21 @@ fn score_remixer_alignment(
     let cand_title_norm = normalize_string(&candidate.title);
     let cand_artist_norm = normalize_string(&candidate.artist);
 
-    let found = cand_title_norm.contains(&remixer_norm)
-        || cand_artist_norm.contains(&remixer_norm);
+    let found = cand_title_norm.contains(&remixer_norm) || cand_artist_norm.contains(&remixer_norm);
 
-    if found {
-        0.15
-    } else {
-        -0.80
-    }
+    if found { 0.15 } else { -0.80 }
 }
 
-fn mv_intro_outro_penalty(
-    expected: Duration,
-    candidate: Duration,
-    media_type: MediaType,
-) -> f64 {
+fn mv_intro_outro_penalty(expected: Duration, candidate: Duration, media_type: MediaType) -> f64 {
     if !matches!(media_type, MediaType::MusicVideo) {
         return 0.0;
     }
-    
+
     let delta = candidate.as_secs_f64() - expected.as_secs_f64();
     if delta <= 12.0 {
         return 0.0;
     }
-    
+
     ((delta - 12.0) / 60.0).min(0.10)
 }
 
@@ -1087,7 +1094,11 @@ pub fn score_candidates(
         }
 
         // Media type classification (Stage 2) and adjustments (Stage 4)
-        let media_type = classify_media_type_v2(&candidate.title, &candidate.artist, candidate.is_topic_channel);
+        let media_type = classify_media_type_v2(
+            &candidate.title,
+            &candidate.artist,
+            candidate.is_topic_channel,
+        );
         let pass_gates =
             title_similarity >= 0.70 && (expected_artist.is_none() || artist_similarity >= 0.50);
         if pass_gates && confidence == MetadataConfidence::Trusted {
@@ -1783,9 +1794,22 @@ mod tests {
 
         // Official Audio should be first
         assert_eq!(scored[0].0.url, "https://youtube/audio");
-        let mv_score = scored.iter().find(|c| c.0.url == "https://youtube/mv").unwrap().1;
-        let audio_score = scored.iter().find(|c| c.0.url == "https://youtube/audio").unwrap().1;
-        assert!(audio_score > mv_score, "Audio score ({}) should be greater than MV score ({})", audio_score, mv_score);
+        let mv_score = scored
+            .iter()
+            .find(|c| c.0.url == "https://youtube/mv")
+            .unwrap()
+            .1;
+        let audio_score = scored
+            .iter()
+            .find(|c| c.0.url == "https://youtube/audio")
+            .unwrap()
+            .1;
+        assert!(
+            audio_score > mv_score,
+            "Audio score ({}) should be greater than MV score ({})",
+            audio_score,
+            mv_score
+        );
     }
 
     #[test]
@@ -1910,19 +1934,17 @@ mod tests {
 
     #[test]
     fn test_shorts_hard_reject_by_duration() {
-        let candidates = vec![
-            TrackCandidate {
-                source: "YouTube".to_owned(),
-                title: "Faded teaser".to_owned(),
-                artist: "Alan Walker".to_owned(),
-                url: "https://youtube/teaser".to_owned(),
-                duration: Some(Duration::from_secs(45)),
-                popularity: Some(1000),
-                is_official: false,
-                is_topic_channel: false,
-                thumbnail: None,
-            },
-        ];
+        let candidates = vec![TrackCandidate {
+            source: "YouTube".to_owned(),
+            title: "Faded teaser".to_owned(),
+            artist: "Alan Walker".to_owned(),
+            url: "https://youtube/teaser".to_owned(),
+            duration: Some(Duration::from_secs(45)),
+            popularity: Some(1000),
+            is_official: false,
+            is_topic_channel: false,
+            thumbnail: None,
+        }];
 
         let scored = score_candidates(
             candidates,
@@ -1979,19 +2001,17 @@ mod tests {
 
     #[test]
     fn test_loop_hard_reject() {
-        let candidates = vec![
-            TrackCandidate {
-                source: "YouTube".to_owned(),
-                title: "Faded 1 hour loop".to_owned(),
-                artist: "Alan Walker".to_owned(),
-                url: "https://youtube/loop".to_owned(),
-                duration: Some(Duration::from_secs(3600)),
-                popularity: Some(1000),
-                is_official: false,
-                is_topic_channel: false,
-                thumbnail: None,
-            },
-        ];
+        let candidates = vec![TrackCandidate {
+            source: "YouTube".to_owned(),
+            title: "Faded 1 hour loop".to_owned(),
+            artist: "Alan Walker".to_owned(),
+            url: "https://youtube/loop".to_owned(),
+            duration: Some(Duration::from_secs(3600)),
+            popularity: Some(1000),
+            is_official: false,
+            is_topic_channel: false,
+            thumbnail: None,
+        }];
 
         let scored = score_candidates(
             candidates,
@@ -2286,9 +2306,17 @@ mod tests {
             MetadataConfidence::Trusted,
         );
 
-        println!("Topic score: {}, Chu de score: {}", scored[0].1, scored[1].1);
+        println!(
+            "Topic score: {}, Chu de score: {}",
+            scored[0].1, scored[1].1
+        );
         assert_eq!(scored[0].0.url, "https://youtube/topic");
-        assert!(scored[0].1 > scored[1].1, "Topic channel should beat Chủ đề channel, got {} vs {}", scored[0].1, scored[1].1);
+        assert!(
+            scored[0].1 > scored[1].1,
+            "Topic channel should beat Chủ đề channel, got {} vs {}",
+            scored[0].1,
+            scored[1].1
+        );
     }
 
     #[test]

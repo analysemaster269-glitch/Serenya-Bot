@@ -178,7 +178,9 @@ pub(crate) async fn enqueue_and_play_resolved(
     let config = ctx.data().config();
     let max_queue_size = config.playback.max_queue_size;
 
-    let can_play = player.now_playing.is_none() && (player.playback_status == PlaybackStatus::Idle || player.playback_status == PlaybackStatus::Stopped);
+    let can_play = player.now_playing.is_none()
+        && (player.playback_status == PlaybackStatus::Idle
+            || player.playback_status == PlaybackStatus::Stopped);
     if can_play {
         let mut first_track = tracks.remove(0);
         let requester_name: std::sync::Arc<str> = std::sync::Arc::from(ctx.author().name.as_str());

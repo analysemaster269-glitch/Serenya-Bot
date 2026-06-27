@@ -45,8 +45,8 @@ pub async fn play(
     let mut tracks = Vec::new();
     for t in playlist.tracks {
         tracks.push(Track {
-            title: t.title,
-            url: t.url,
+            title: t.title.into(),
+            url: t.url.into(),
             duration: t.duration_secs.map(std::time::Duration::from_secs),
             requester_id: ctx.author().id,
             requester_name: Some(req_name.clone()),

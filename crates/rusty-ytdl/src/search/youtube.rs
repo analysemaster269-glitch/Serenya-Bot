@@ -602,8 +602,9 @@ impl Playlist {
         };
 
         if !html.is_empty() {
-            let serde_value = serde_json::from_str::<serde_json::Value>(&html)
-                .map_err(|e| VideoError::IsNotPlaylist(format!("invalid JSON in ytInitialData: {e}")))?;
+            let serde_value = serde_json::from_str::<serde_json::Value>(&html).map_err(|e| {
+                VideoError::IsNotPlaylist(format!("invalid JSON in ytInitialData: {e}"))
+            })?;
             let contents = &serde_value["contents"]["twoColumnBrowseResultsRenderer"]["tabs"][0]
                 ["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]
                 ["itemSectionRenderer"]["contents"][0]["playlistVideoListRenderer"]["contents"];
