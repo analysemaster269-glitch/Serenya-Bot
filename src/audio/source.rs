@@ -612,7 +612,8 @@ async fn extract_stream_url_inner(
     if track_url.contains("soundcloud.com/") {
         match resolve_soundcloud_stream_url(track_url, http_client).await {
             Ok(stream) => {
-                cache_set_stream(track_url.to_owned(), &stream).await;
+                // SoundCloud streams are already cached in SOUNDCLOUD_STREAM_CACHE
+                // by resolve_soundcloud_stream_url — no need to double-cache in STREAM_CACHE.
                 return Ok(stream);
             }
             Err(e) => {
@@ -831,6 +832,15 @@ pub async fn create_ffmpeg_stream_input(
 
     let child_container: songbird::input::ChildContainer = child.into();
     Ok(child_container.into())
+}
+
+/// Returns entry counts for all caches without clearing them.
+pub fn cache_entry_counts() -> (u64, u64, u64, u64) {
+    let query = QUERY_CACHE.load().entry_count();
+    let metadata = METADATA_CACHE.load().entry_count();
+    let stream = STREAM_CACHE.load().entry_count();
+    let sc_stream = SOUNDCLOUD_STREAM_CACHE.load().entry_count();
+    (query, metadata, stream, sc_stream)
 }
 
 /// Rebuilds all caches with fresh TTL values from current settings.

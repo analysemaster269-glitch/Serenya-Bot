@@ -268,7 +268,7 @@ impl YouTube {
 
         let response = response.unwrap();
 
-        let result = get_api_key(response);
+        let result = get_api_key(&response);
 
         let mut innertube_cache_data = self.innertube_cache.write().unwrap();
 
@@ -504,64 +504,73 @@ impl Playlist {
         let url = url_option.unwrap();
 
         // Assign request options to client
-        let mut client = reqwest::Client::builder();
-
-        if options
+        let client = if let Some(client) = options
             .request_options
             .as_ref()
-            .map(|x| x.proxy.is_some())
-            .unwrap_or(false)
+            .and_then(|x| x.client.as_ref())
         {
-            let proxy = options
+            client.clone()
+        } else {
+            let mut client = reqwest::Client::builder();
+
+            if options
                 .request_options
                 .as_ref()
-                .unwrap()
-                .proxy
-                .as_ref()
-                .unwrap()
-                .clone();
-            client = client.proxy(proxy);
-        }
+                .map(|x| x.proxy.is_some())
+                .unwrap_or(false)
+            {
+                let proxy = options
+                    .request_options
+                    .as_ref()
+                    .unwrap()
+                    .proxy
+                    .as_ref()
+                    .unwrap()
+                    .clone();
+                client = client.proxy(proxy);
+            }
 
-        if options
-            .request_options
-            .as_ref()
-            .map(|x| x.ipv6_block.is_some())
-            .unwrap_or(false)
-        {
-            let ipv6 = options
+            if options
                 .request_options
                 .as_ref()
-                .unwrap()
-                .ipv6_block
-                .as_ref()
-                .unwrap();
-            let ipv6 = get_random_v6_ip(ipv6)?;
-            client = client.local_address(ipv6);
-        }
+                .map(|x| x.ipv6_block.is_some())
+                .unwrap_or(false)
+            {
+                let ipv6 = options
+                    .request_options
+                    .as_ref()
+                    .unwrap()
+                    .ipv6_block
+                    .as_ref()
+                    .unwrap();
+                let ipv6 = get_random_v6_ip(ipv6)?;
+                client = client.local_address(ipv6);
+            }
 
-        if options
-            .request_options
-            .as_ref()
-            .map(|x| x.cookies.is_some())
-            .unwrap_or(false)
-        {
-            let cookie = options
+            if options
                 .request_options
                 .as_ref()
-                .unwrap()
-                .cookies
-                .as_ref()
-                .unwrap();
-            let host = "https://youtube.com".parse::<url::Url>().unwrap();
+                .map(|x| x.cookies.is_some())
+                .unwrap_or(false)
+            {
+                let cookie = options
+                    .request_options
+                    .as_ref()
+                    .unwrap()
+                    .cookies
+                    .as_ref()
+                    .unwrap();
+                let host = "https://youtube.com".parse::<url::Url>().unwrap();
 
-            let jar = reqwest::cookie::Jar::default();
-            jar.add_cookie_str(cookie.as_str(), &host);
+                let jar = reqwest::cookie::Jar::default();
+                jar.add_cookie_str(cookie.as_str(), &host);
 
-            client = client.cookie_provider(Arc::new(jar));
-        }
+                client = client.cookie_provider(Arc::new(jar));
+            }
 
-        let client = client.build().map_err(VideoError::Reqwest)?;
+            client.build().map_err(VideoError::Reqwest)?
+        };
+
         let client = reqwest_middleware::ClientBuilder::new(client).build();
 
         // Build headers with consent cookie to bypass GDPR consent wall
@@ -576,24 +585,25 @@ impl Playlist {
 
         // Get playlist datas
         let html = {
-            let document = Html::parse_document(&html_first);
-            let scripts_selector = Selector::parse("script").unwrap();
-            let mut initial_response_string = document
-                .select(&scripts_selector)
-                .filter(|x| x.inner_html().contains("var ytInitialData ="))
-                .map(|x| x.inner_html().replace("var ytInitialData =", ""))
-                .next()
-                .unwrap_or(String::from(""))
-                .trim()
-                .to_string();
-
-            initial_response_string.pop();
-
-            initial_response_string
+            if let Some(pos) = html_first.find("var ytInitialData =") {
+                let start = pos + "var ytInitialData =".len();
+                if let Some(end_pos) = html_first[start..].find("</script>") {
+                    let mut json_str = html_first[start..start + end_pos].trim().to_string();
+                    if json_str.ends_with(';') {
+                        json_str.pop();
+                    }
+                    json_str.trim().to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
         };
 
         if !html.is_empty() {
-            let serde_value = serde_json::from_str::<serde_json::Value>(&html).unwrap();
+            let serde_value = serde_json::from_str::<serde_json::Value>(&html)
+                .map_err(|e| VideoError::IsNotPlaylist(format!("invalid JSON in ytInitialData: {e}")))?;
             let contents = &serde_value["contents"]["twoColumnBrowseResultsRenderer"]["tabs"][0]
                 ["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]
                 ["itemSectionRenderer"]["contents"][0]["playlistVideoListRenderer"]["contents"];
@@ -1285,113 +1295,36 @@ fn filter_string(filter: &SearchType) -> String {
     }
 }
 
-fn get_client_version(html: impl Into<String>) -> String {
-    let html: String = html.into();
-    let first_collect_for_client_version = html
-        .split(r#""INNERTUBE_CONTEXT_CLIENT_VERSION":""#)
-        .collect::<Vec<&str>>();
-
-    return match first_collect_for_client_version.get(1) {
-        Some(x) => {
-            let second_collect = x.split('"').collect::<Vec<&str>>();
-            if !second_collect.is_empty() {
-                let inner_tube = second_collect.first().unwrap().to_string();
-                // println!("INNERTUBE_CONTEXT_CLIENT_VERSION => {inner_tube}");
-
-                inner_tube
-            } else {
-                let third_collect = html
-                    .split(r#""innertube_context_client_version":""#)
-                    .collect::<Vec<&str>>();
-
-                match third_collect.get(1) {
-                    Some(c) => {
-                        let forth_collect = c.split('"').collect::<Vec<&str>>();
-                        if !forth_collect.is_empty() {
-                            let inner_tube = forth_collect.first().unwrap().to_string();
-                            // println!("innertube_context_client_version => {inner_tube}");
-                            inner_tube
-                        } else {
-                            DEFAULT_CLIENT_VERSOIN.to_string()
-                        }
-                    }
-                    None => DEFAULT_CLIENT_VERSOIN.to_string(),
-                }
-            }
+fn get_client_version(html: &str) -> String {
+    if let Some(pos) = html.find(r#""INNERTUBE_CONTEXT_CLIENT_VERSION":""#) {
+        let start = pos + r#""INNERTUBE_CONTEXT_CLIENT_VERSION":""#.len();
+        if let Some(end) = html[start..].find('"') {
+            return html[start..start + end].to_string();
         }
-        None => {
-            let third_collect = html
-                .split(r#""innertube_context_client_version":""#)
-                .collect::<Vec<&str>>();
-
-            match third_collect.get(1) {
-                Some(c) => {
-                    let forth_collect = c.split('"').collect::<Vec<&str>>();
-                    if !forth_collect.is_empty() {
-                        let inner_tube = forth_collect.first().unwrap().to_string();
-                        // println!("innertube_context_client_version => {inner_tube}");
-                        inner_tube
-                    } else {
-                        DEFAULT_CLIENT_VERSOIN.to_string()
-                    }
-                }
-                None => DEFAULT_CLIENT_VERSOIN.to_string(),
-            }
+    }
+    if let Some(pos) = html.find(r#""innertube_context_client_version":""#) {
+        let start = pos + r#""innertube_context_client_version":""#.len();
+        if let Some(end) = html[start..].find('"') {
+            return html[start..start + end].to_string();
         }
-    };
+    }
+    DEFAULT_CLIENT_VERSOIN.to_string()
 }
 
-fn get_api_key(html: impl Into<String>) -> String {
-    let html: String = html.into();
-
-    let first_collect = html
-        .split(r#""INNERTUBE_API_KEY":""#)
-        .collect::<Vec<&str>>();
-
-    return match first_collect.get(1) {
-        Some(x) => {
-            let second_collect = x.split('"').collect::<Vec<&str>>();
-            if !second_collect.is_empty() {
-                let inner_tube = second_collect.first().unwrap().to_string();
-                // println!("INNERTUBE_API_KEY => {inner_tube}");
-                inner_tube
-            } else {
-                let third_collect = html.split(r#""innertubeApiKey":""#).collect::<Vec<&str>>();
-
-                match third_collect.get(1) {
-                    Some(c) => {
-                        let forth_collect = c.split('"').collect::<Vec<&str>>();
-                        if !forth_collect.is_empty() {
-                            let inner_tube = forth_collect.first().unwrap().to_string();
-                            // println!("innertubeApiKey => {inner_tube}");
-
-                            inner_tube
-                        } else {
-                            DEFAULT_INNERTUBE_KEY.to_string()
-                        }
-                    }
-                    None => DEFAULT_INNERTUBE_KEY.to_string(),
-                }
-            }
+fn get_api_key(html: &str) -> String {
+    if let Some(pos) = html.find(r#""INNERTUBE_API_KEY":""#) {
+        let start = pos + r#""INNERTUBE_API_KEY":""#.len();
+        if let Some(end) = html[start..].find('"') {
+            return html[start..start + end].to_string();
         }
-        None => {
-            let third_collect = html.split(r#""innertubeApiKey":""#).collect::<Vec<&str>>();
-
-            match third_collect.get(1) {
-                Some(c) => {
-                    let forth_collect = c.split('"').collect::<Vec<&str>>();
-                    if !forth_collect.is_empty() {
-                        let inner_tube = forth_collect.first().unwrap().to_string();
-                        // println!("innertubeApiKey => {inner_tube}");
-                        inner_tube
-                    } else {
-                        DEFAULT_INNERTUBE_KEY.to_string()
-                    }
-                }
-                None => DEFAULT_INNERTUBE_KEY.to_string(),
-            }
+    }
+    if let Some(pos) = html.find(r#""innertubeApiKey":""#) {
+        let start = pos + r#""innertubeApiKey":""#.len();
+        if let Some(end) = html[start..].find('"') {
+            return html[start..start + end].to_string();
         }
-    };
+    }
+    DEFAULT_INNERTUBE_KEY.to_string()
 }
 
 async fn make_request(
@@ -1486,25 +1419,31 @@ fn parse_search_result(
     let mut html: String = html.into();
 
     html = {
-        let document = Html::parse_document(&html);
-        let scripts_selector = Selector::parse("script").unwrap();
-        let mut initial_response_string = document
-            .select(&scripts_selector)
-            .filter(|x| x.inner_html().contains("var ytInitialData ="))
-            .map(|x| x.inner_html().replace("var ytInitialData =", ""))
-            .next()
-            .unwrap_or(String::from(""))
-            .trim()
-            .to_string();
-
-        initial_response_string.pop();
-
-        initial_response_string
+        if let Some(pos) = html.find("var ytInitialData =") {
+            let start = pos + "var ytInitialData =".len();
+            if let Some(end_pos) = html[start..].find("</script>") {
+                let mut json_str = html[start..start + end_pos].trim().to_string();
+                if json_str.ends_with(';') {
+                    json_str.pop();
+                }
+                json_str.trim().to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
     };
 
     // check if html is not empty
     if !html.is_empty() {
-        let serde_value = serde_json::from_str::<serde_json::Value>(&html).unwrap();
+        let serde_value = match serde_json::from_str::<serde_json::Value>(&html) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Failed to parse ytInitialData in search results: {}", e);
+                return Vec::new();
+            }
+        };
         let contents = &serde_value["contents"]["twoColumnSearchResultsRenderer"]
             ["primaryContents"]["sectionListRenderer"]["contents"][0]["itemSectionRenderer"]
             ["contents"];

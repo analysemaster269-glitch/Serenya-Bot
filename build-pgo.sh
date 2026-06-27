@@ -29,7 +29,7 @@ if [ -n "$VERBOSE_FLAG" ]; then
 else
     echo -e "\e[90mRunning command: cargo build --profile pgo-gen\e[0m"
 fi
-export RUSTFLAGS="-C profile-generate=$PGO_DIR -C target-cpu=native"
+export RUSTFLAGS="-C profile-generate=$PGO_DIR -C target-cpu=native -C llvm-args=-vp-counters-per-site=6"
 cargo build --profile pgo-gen $VERBOSE_FLAG
 
 # 3. Instruction to collect profile data

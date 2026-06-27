@@ -53,6 +53,10 @@ percent-encoding = "2"
 arc-swap = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 aho-corasick = "1.1.4"
+dhat = { version = "0.3", optional = true }
+
+[features]
+dhat-heap = ["dep:dhat"]
 
 [profile.release]
 opt-level = 3

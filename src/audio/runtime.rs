@@ -109,6 +109,10 @@ pub fn cleanup_guild(guild_id: u64) {
     RESOLVER_RUNTIME.guild_resolve_semaphores.remove(&guild_id);
 }
 
+pub fn negative_cache_entry_count() -> u64 {
+    RESOLVER_RUNTIME.negative_cache.load().entry_count()
+}
+    
 pub fn settings() -> Arc<ResolverSection> {
     RESOLVER_RUNTIME.settings.load().clone()
 }

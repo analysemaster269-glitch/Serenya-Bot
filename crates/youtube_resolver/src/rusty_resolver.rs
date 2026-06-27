@@ -2,13 +2,17 @@ use crate::{ResolveContext, ResolveError, ResolvedStream};
 
 pub async fn resolve_best_audio_stream_rusty_ytdl(
     video_id: &str,
-    _context: &ResolveContext,
+    context: &ResolveContext,
 ) -> Result<ResolvedStream, ResolveError> {
-    use rusty_ytdl::{Video, VideoOptions, VideoQuality, VideoSearchOptions};
+    use rusty_ytdl::{Video, VideoOptions, VideoQuality, VideoSearchOptions, RequestOptions};
 
     let opts = VideoOptions {
         quality: VideoQuality::HighestAudio,
         filter: VideoSearchOptions::Audio,
+        request_options: RequestOptions {
+            client: Some(context.http_client.clone()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let video = Video::new_with_options(video_id, opts)

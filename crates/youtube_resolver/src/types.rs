@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -18,8 +19,11 @@ pub struct ResolveContext {
     pub http_client: reqwest::Client,
 }
 
+static DEFAULT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
 impl Default for ResolveContext {
     fn default() -> Self {
+        let http_client = DEFAULT_CLIENT.get_or_init(reqwest::Client::new).clone();
         Self {
             visitor_data: None,
             user_agent_override: None,
@@ -27,7 +31,21 @@ impl Default for ResolveContext {
             region: Some("US".to_string()),
             timeout: Duration::from_secs(5),
             trace_id: None,
-            http_client: reqwest::Client::new(),
+            http_client,
+        }
+    }
+}
+
+impl ResolveContext {
+    pub fn new(http_client: reqwest::Client) -> Self {
+        Self {
+            visitor_data: None,
+            user_agent_override: None,
+            language: Some("en".to_string()),
+            region: Some("US".to_string()),
+            timeout: Duration::from_secs(5),
+            trace_id: None,
+            http_client,
         }
     }
 }

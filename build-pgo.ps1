@@ -49,7 +49,7 @@ if ($VerboseOutput) {
 } else {
     Write-Host "Running command: cargo build --profile pgo-gen" -ForegroundColor Gray
 }
-$Env:RUSTFLAGS = "-C profile-generate=$PGO_DIR -C target-cpu=native"
+$Env:RUSTFLAGS = "-C profile-generate=$PGO_DIR -C target-cpu=native -C llvm-args=-vp-counters-per-site=6"
 cargo build --profile pgo-gen @CargoFlags
 
 # 3. Instruction to collect profile data
