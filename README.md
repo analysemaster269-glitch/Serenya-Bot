@@ -4,7 +4,7 @@ Serenya Bot is a Rust-based Discord music bot built for stable playback, low lat
 
 ## Current Project Status
 
-- Main crate version: `serenya` `1.1.1` (Optimized version over 1.1.0 workspace ytdl resolver).
+- Main crate version: `serenya` `1.1.4` (Optimized version over 1.1.0 workspace ytdl resolver).
 - Rust edition: `2024`.
 - Declared Rust toolchain: `rust-version = "1.96.0"`.
 - Workspace members:
@@ -43,7 +43,7 @@ Serenya includes the internal `youtube_resolver` crate as the native replacement
   5. `TVHTML5`
 - Implements a custom `format_selector` for selecting audio formats.
 - Prefers audio-only, non-DRM WebM Opus before M4A/AAC.
-- Uses `boa_engine` in `js_solver` to handle signature deciphering and `n`-parameter throttling when required.
+- Uses `rquickjs` in `js_solver` to handle signature deciphering and `n`-parameter throttling when required.
 - Uses a SHA-1 hash of `player_url` as the cache-key prefix to avoid collisions between different `base.js` versions.
 - Uses `stream_probe` to range-read a stream before playback and catch HTTP 403 responses or throttled streams early.
 - Returns `ResolvedStream` metadata, including URL, client kind, user agent, MIME type, bitrate, and resolve source so FFmpeg can use stream-specific headers.
@@ -232,7 +232,6 @@ chmod +x build-pgo.sh
 
 | Command | Description |
 | --- | --- |
-| `/search <query>` | Searches providers and shows a selectable result menu. |
 | `/nowplaying` | Shows the current track. |
 | `/songinfo` | Shows detailed metadata for the current track. |
 | `/lyrics [query]` | Finds lyrics for the current song or a custom query. |
@@ -328,7 +327,7 @@ Serenya builds on ideas, algorithms, and libraries from the Rust, Discord, and a
 - **yt-dlp**: Thanks to the [yt-dlp](https://github.com/yt-dlp/yt-dlp) project for public research into YouTube stream extraction, signature deciphering, and player cipher edge cases.
 - **Aho-Corasick**: The [aho-corasick](https://crates.io/crates/aho-corasick) algorithm is used for optimal \(O(N)\) multi-pattern log redaction.
 - **ArcSwap**: The [arc-swap](https://crates.io/crates/arc-swap) utility is used for lock-free fast RCU (Read-Copy-Update) configuration updates.
-- Thanks to the developers of `serenity`, `poise`, `songbird`, `tokio`, `reqwest`, `boa_engine`, `moka`, and `tracing`.
+- Thanks to the developers of `serenity`, `poise`, `songbird`, `tokio`, `reqwest`, `rquickjs`, `moka`, and `tracing`.
 
 ## License
 

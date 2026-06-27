@@ -3,8 +3,8 @@ use crate::audio::providers::{
     SoundCloudProvider, SpotifyProvider, YouTubeMusicProvider, YouTubeProvider,
 };
 use crate::audio::ranking::{
-    TrackCandidate, adjust_single_word_score, contains_unrequested_variant,
-    jaro_winkler_similarity, score_candidates, MetadataConfidence, has_critical_risks,
+    MetadataConfidence, TrackCandidate, adjust_single_word_score, contains_unrequested_variant,
+    has_critical_risks, jaro_winkler_similarity, score_candidates,
 };
 use crate::core::{SourceType, Track};
 use crate::database::DatabaseManager;
@@ -30,7 +30,7 @@ impl ResolvedInput {
                 if tracks.is_empty() {
                     vec![]
                 } else {
-                    vec![tracks.remove(0)] // just the top candidate
+                    vec![tracks.remove(0)]
                 }
             }
         }
@@ -360,7 +360,6 @@ async fn perform_parallel_search(
         &[
             SearchProviderKind::YouTubeMusic,
             SearchProviderKind::YouTube,
-            SearchProviderKind::SoundCloud,
         ],
         search_query,
         expected_title,
@@ -412,19 +411,19 @@ async fn collect_search_results(
         .into_iter()
         .take(25)
         .map(|(candidate, score)| Track {
-            title: candidate_display_title(&candidate),
-            url: candidate.url,
+            title: candidate_display_title(&candidate).into(),
+            url: candidate.url.into(),
             duration: candidate.duration,
             requester_id: serenity::UserId::new(user_id),
             requester_name: None,
             source_type: SourceType::Search,
             resolved_url: None,
             thumbnail: candidate.thumbnail,
-            source_provider: format!(
+            source_provider: std::sync::Arc::from(format!(
                 "{} • {:.0}%",
                 candidate.source,
                 score * 100.0
-            ),
+            )),
         })
         .collect();
 
@@ -617,26 +616,25 @@ pub async fn resolve_input(
     let query_trimmed = query.trim();
 
     let res = async move {
-        // 1. Check user-owned playlist exact match
         if let Some(playlist) = db.get_user_playlist(user_id, query_trimmed).await {
             let mut tracks = Vec::new();
+            let source_prov: std::sync::Arc<str> = std::sync::Arc::from("Playlist");
             for t in playlist.tracks {
                 tracks.push(Track {
-                    title: t.title,
-                    url: t.url,
+                    title: t.title.into(),
+                    url: t.url.into(),
                     duration: t.duration_secs.map(Duration::from_secs),
                     requester_id: serenity::UserId::new(user_id),
                     requester_name: None,
                     source_type: SourceType::Playlist,
                     resolved_url: None,
                     thumbnail: None,
-                    source_provider: "Playlist".to_owned(),
+                    source_provider: source_prov.clone(),
                 });
             }
             return Ok(ResolvedInput::Playlist(tracks));
         }
 
-        // 2. Check for Spotify links (playlist/album/artist)
         if query_trimmed.contains("open.spotify.com/playlist/") {
             let config = crate::audio::runtime::spotify_settings();
             let (enabled, limit) = match config {
@@ -648,13 +646,13 @@ pub async fn resolve_input(
                     "Spotify playlist import is disabled in configuration.".into(),
                 ));
             }
-            if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/playlist/") {
+            return if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/playlist/") {
                 let tracks = resolve_spotify_playlist(&id, limit, user_id, http_client).await?;
-                return Ok(ResolvedInput::Playlist(tracks));
+                Ok(ResolvedInput::Playlist(tracks))
             } else {
-                return Err(SerenyaError::Audio(
+                Err(SerenyaError::Audio(
                     "Failed to extract Spotify playlist ID.".into(),
-                ));
+                ))
             }
         }
 
@@ -669,13 +667,13 @@ pub async fn resolve_input(
                     "Spotify album import is disabled in configuration.".into(),
                 ));
             }
-            if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/album/") {
+            return if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/album/") {
                 let tracks = resolve_spotify_album(&id, limit, user_id, http_client).await?;
-                return Ok(ResolvedInput::Playlist(tracks));
+                Ok(ResolvedInput::Playlist(tracks))
             } else {
-                return Err(SerenyaError::Audio(
+                Err(SerenyaError::Audio(
                     "Failed to extract Spotify album ID.".into(),
-                ));
+                ))
             }
         }
 
@@ -690,18 +688,17 @@ pub async fn resolve_input(
                     "Spotify artist top tracks import is disabled in configuration.".into(),
                 ));
             }
-            if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/artist/") {
+            return if let Some(id) = extract_spotify_id(query_trimmed, "spotify.com/artist/") {
                 let tracks =
                     resolve_spotify_artist_top_tracks(&id, limit, user_id, http_client).await?;
-                return Ok(ResolvedInput::Playlist(tracks));
+                Ok(ResolvedInput::Playlist(tracks))
             } else {
-                return Err(SerenyaError::Audio(
+                Err(SerenyaError::Audio(
                     "Failed to extract Spotify artist ID.".into(),
-                ));
+                ))
             }
         }
 
-        // 3. Check Cache
         if query_trimmed.starts_with("http://") || query_trimmed.starts_with("https://") {
             if let Some(mut cached_track) =
                 crate::audio::source::cache_get_url_metadata(query_trimmed).await
@@ -720,7 +717,6 @@ pub async fn resolve_input(
 
         tracing::debug!(query = %query_trimmed, cache = "miss", "cache_miss");
 
-        // Instantiate providers
         let spotify_provider = SpotifyProvider;
         let apple_provider = AppleMusicProvider;
         let deezer_provider = DeezerProvider;
@@ -728,7 +724,6 @@ pub async fn resolve_input(
         let soundcloud_provider = SoundCloudProvider;
         let direct_provider = DirectUrlProvider;
 
-        // 4. Resolve metadata or play directly
         if spotify_provider.supports(query_trimmed) {
             let meta =
                 if let Some(track_id) = extract_spotify_id(query_trimmed, "spotify.com/track/") {
@@ -982,7 +977,7 @@ fn evaluate_confidence_and_respond(
         .as_deref()
         .map(|title| format!("{original_query} {title}"))
         .unwrap_or_else(|| original_query.to_owned());
-    
+
     let has_critical = has_critical_risks(
         top_cand,
         original_query,
@@ -991,7 +986,8 @@ fn evaluate_confidence_and_respond(
         MetadataConfidence::Trusted,
     );
 
-    let variant_conflict = contains_unrequested_variant(&top_cand.title, &variant_context) || has_critical;
+    let variant_conflict =
+        contains_unrequested_variant(&top_cand.title, &variant_context) || has_critical;
 
     let mut low_confidence = *top_score < settings.auto_pick_threshold || variant_conflict;
 
@@ -1021,19 +1017,19 @@ fn evaluate_confidence_and_respond(
         let mut tracks = Vec::new();
         for (cand, score) in scored.into_iter().take(5) {
             tracks.push(Track {
-                title: candidate_display_title(&cand),
-                url: cand.url,
+                title: candidate_display_title(&cand).into(),
+                url: cand.url.into(),
                 duration: cand.duration,
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
                 source_type: SourceType::Search,
                 resolved_url: None,
                 thumbnail: forced_thumbnail.clone().or(cand.thumbnail),
-                source_provider: format!(
+                source_provider: std::sync::Arc::from(format!(
                     "{} • {:.0}%",
                     cand.source,
                     score * 100.0
-                ),
+                )),
             });
         }
         Ok(ResolvedInput::SearchResults(tracks))
@@ -1066,15 +1062,17 @@ fn evaluate_confidence_and_respond(
             "High confidence match, auto-picking"
         );
         let track = Track {
-            title: forced_title.unwrap_or_else(|| candidate_display_title(top_cand)),
-            url: top_cand.url.clone(),
+            title: forced_title
+                .unwrap_or_else(|| candidate_display_title(top_cand))
+                .into(),
+            url: top_cand.url.clone().into(),
             duration: forced_duration.or(top_cand.duration),
             requester_id: serenity::UserId::new(user_id),
             requester_name: None,
             source_type: SourceType::Search,
             resolved_url: None,
             thumbnail: forced_thumbnail.or_else(|| top_cand.thumbnail.clone()),
-            source_provider: selected_provider,
+            source_provider: std::sync::Arc::from(selected_provider),
         };
 
         // Cache the high-confidence search result asynchronously to keep it non-blocking
@@ -1241,7 +1239,6 @@ async fn resolve_spotify_embed_fallback(
     let mut tracks = Vec::new();
     for embed_track in track_list.into_iter().take(limit) {
         if embed_track.uri.starts_with("spotify:track:") {
-            // Build a display title including artist (subtitle) for better identification
             let display_title = embed_track.title.clone();
 
             // Use YouTube search instead of Spotify URL — Spotify URLs are DRM-protected
@@ -1254,15 +1251,15 @@ async fn resolve_spotify_embed_fallback(
             let track_url = format!("ytsearch1:{}", search_query);
 
             tracks.push(Track {
-                title: display_title,
-                url: track_url,
+                title: display_title.into(),
+                url: track_url.into(),
                 duration: embed_track.duration.map(Duration::from_millis),
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
                 source_type: SourceType::Url,
                 resolved_url: None,
                 thumbnail: entity_thumbnail.clone().map(std::sync::Arc::from),
-                source_provider: "Spotify".to_owned(),
+                source_provider: std::sync::Arc::from("Spotify"),
             });
         }
     }
@@ -1385,7 +1382,9 @@ async fn spotify_partner_post(
     })?;
 
     let body = response.json::<serde_json::Value>().await.map_err(|e| {
-        SerenyaError::Audio(format!("Failed to parse Spotify Partner API JSON response: {e}"))
+        SerenyaError::Audio(format!(
+            "Failed to parse Spotify Partner API JSON response: {e}"
+        ))
     })?;
 
     if let Some(errors) = body.get("errors").and_then(|e| e.as_array())
@@ -1411,6 +1410,7 @@ async fn resolve_spotify_playlist_api(
     http_client: &reqwest::Client,
 ) -> Result<Vec<Track>, SerenyaError> {
     let mut tracks = Vec::with_capacity(limit);
+    let source_prov: std::sync::Arc<str> = std::sync::Arc::from("Spotify");
     let mut offset = 0;
     let mut total_count = None;
 
@@ -1528,15 +1528,15 @@ async fn resolve_spotify_playlist_api(
             let track_url = format!("ytsearch1:{}", search_query);
 
             tracks.push(Track {
-                title: name.to_owned(),
-                url: track_url,
+                title: name.into(),
+                url: track_url.into(),
                 duration: Some(Duration::from_millis(duration_ms)),
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
                 source_type: SourceType::Url,
                 resolved_url: None,
                 thumbnail,
-                source_provider: "Spotify".to_owned(),
+                source_provider: source_prov.clone(),
             });
 
             if tracks.len() >= limit {
@@ -1576,6 +1576,11 @@ async fn resolve_spotify_playlist(
         limit
     );
     if playlist_id.starts_with("37i9dQZF") {
+        if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+            return Err(SerenyaError::Audio(
+                "Spotify embed fallback is disabled (required for Spotify-curated playlist)".into(),
+            ));
+        }
         tracing::debug!(
             "Playlist {} is Spotify-curated. Bypassing Partner API and using embed scraper fallback directly.",
             playlist_id
@@ -1601,6 +1606,9 @@ async fn resolve_spotify_playlist(
                     return Ok(tracks);
                 }
                 Err(err) => {
+                    if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+                        return Err(err);
+                    }
                     tracing::warn!(
                         "Spotify Web API playlist resolution failed ({:?}). Falling back to Spotify embed scraper...",
                         err
@@ -1608,11 +1616,21 @@ async fn resolve_spotify_playlist(
                 }
             }
         } else {
+            if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+                return Err(SerenyaError::Audio(
+                    "Spotify sp_dc cookie missing in config and embed fallback is disabled".into(),
+                ));
+            }
             tracing::warn!(
                 "Spotify sp_dc cookie missing in config. Falling back to Spotify embed scraper."
             );
         }
     } else {
+        if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+            return Err(SerenyaError::Audio(
+                "Spotify settings missing in config and embed fallback is disabled".into(),
+            ));
+        }
         tracing::warn!(
             "Spotify settings missing in config. Falling back to Spotify embed scraper."
         );
@@ -1627,6 +1645,7 @@ async fn resolve_spotify_album_api(
     http_client: &reqwest::Client,
 ) -> Result<Vec<Track>, SerenyaError> {
     let mut tracks = Vec::with_capacity(limit);
+    let source_prov: std::sync::Arc<str> = std::sync::Arc::from("Spotify");
     let mut offset = 0;
     let mut total_count = None;
 
@@ -1671,7 +1690,6 @@ async fn resolve_spotify_album_api(
             ));
         }
 
-        // Extract thumbnail at album level
         let thumbnail = album_val
             .pointer("/coverArt/sources")
             .or_else(|| album_val.pointer("/images"))
@@ -1733,15 +1751,15 @@ async fn resolve_spotify_album_api(
             let track_url = format!("ytsearch1:{}", search_query);
 
             tracks.push(Track {
-                title: name.to_owned(),
-                url: track_url,
+                title: name.into(),
+                url: track_url.into(),
                 duration: Some(Duration::from_millis(duration_ms)),
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
                 source_type: SourceType::Url,
                 resolved_url: None,
                 thumbnail: thumbnail.clone(),
-                source_provider: "Spotify".to_owned(),
+                source_provider: source_prov.clone(),
             });
 
             if tracks.len() >= limit {
@@ -1794,6 +1812,9 @@ async fn resolve_spotify_album(
                     return Ok(tracks);
                 }
                 Err(err) => {
+                    if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+                        return Err(err);
+                    }
                     tracing::warn!(
                         "Spotify Web API album resolution failed ({:?}). Falling back to Spotify embed scraper...",
                         err
@@ -1801,11 +1822,21 @@ async fn resolve_spotify_album(
                 }
             }
         } else {
+            if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+                return Err(SerenyaError::Audio(
+                    "Spotify sp_dc cookie missing in config and embed fallback is disabled".into(),
+                ));
+            }
             tracing::warn!(
                 "Spotify sp_dc cookie missing in config. Falling back to Spotify embed scraper."
             );
         }
     } else {
+        if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+            return Err(SerenyaError::Audio(
+                "Spotify settings missing in config and embed fallback is disabled".into(),
+            ));
+        }
         tracing::warn!(
             "Spotify settings missing in config. Falling back to Spotify embed scraper."
         );
@@ -1881,6 +1912,7 @@ async fn resolve_spotify_artist_top_tracks_api(
         items.len()
     );
     let mut tracks = Vec::with_capacity(limit.min(items.len()));
+    let source_prov: std::sync::Arc<str> = std::sync::Arc::from("Spotify");
     for item in items.iter().take(limit) {
         let track_val = item.get("track").unwrap_or(item);
         let Some(name) = track_val.get("name").and_then(|v| v.as_str()) else {
@@ -1918,15 +1950,15 @@ async fn resolve_spotify_artist_top_tracks_api(
         let track_url = format!("ytsearch1:{}", search_query);
 
         tracks.push(Track {
-            title: name.to_owned(),
-            url: track_url,
+            title: name.into(),
+            url: track_url.into(),
             duration: Some(Duration::from_millis(duration_ms)),
             requester_id: serenity::UserId::new(user_id),
             requester_name: None,
             source_type: SourceType::Url,
             resolved_url: None,
             thumbnail,
-            source_provider: "Spotify".to_owned(),
+            source_provider: source_prov.clone(),
         });
     }
 
@@ -1969,6 +2001,9 @@ async fn resolve_spotify_artist_top_tracks(
                     return Ok(tracks);
                 }
                 Err(err) => {
+                    if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+                        return Err(err);
+                    }
                     tracing::warn!(
                         "Spotify Web API artist top tracks resolution failed ({:?}). Falling back to Spotify embed scraper...",
                         err
@@ -1976,11 +2011,21 @@ async fn resolve_spotify_artist_top_tracks(
                 }
             }
         } else {
+            if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+                return Err(SerenyaError::Audio(
+                    "Spotify sp_dc cookie missing in config and embed fallback is disabled".into(),
+                ));
+            }
             tracing::warn!(
                 "Spotify sp_dc cookie missing in config. Falling back to Spotify embed scraper."
             );
         }
     } else {
+        if !crate::audio::runtime::is_spotify_embed_fallback_active() {
+            return Err(SerenyaError::Audio(
+                "Spotify settings missing in config and embed fallback is disabled".into(),
+            ));
+        }
         tracing::warn!(
             "Spotify settings missing in config. Falling back to Spotify embed scraper."
         );
@@ -2108,6 +2153,22 @@ async fn resolve_spotify_track(
     spotify_provider.resolve_metadata(&url, http_client).await
 }
 
+fn is_instrumental_or_non_vocal(title: &str) -> bool {
+    let t = title.to_lowercase();
+    t.contains("instrumental")
+        || t.contains("karaoke")
+        || t.contains("off vocal")
+        || t.contains("minus one")
+        || t.contains("backing track")
+        || t.contains("lofi beat")
+        || t.contains("lofi beats")
+        || t.contains("piano cover")
+        || t.contains("orchestra")
+        || t.contains("violin")
+        || t.contains("classical")
+        || t.contains("bgm")
+}
+
 pub async fn resolve_ytsearch_track(
     track: &mut Track,
     http_client: &reqwest::Client,
@@ -2120,10 +2181,34 @@ pub async fn resolve_ytsearch_track(
     let query = raw_query.to_owned();
     tracing::info!(query, "Resolving ytsearch1 query lazily to YouTube URL");
 
-    let scored =
-        perform_parallel_search(&query, &track.title, None, track.duration, http_client).await?;
+    let mut scored = if is_instrumental_or_non_vocal(&track.title) {
+        perform_parallel_search(&query, &track.title, None, track.duration, http_client).await?
+    } else {
+        let query_lyrics = format!("{} lyrics", query);
+        let (normal_res, lyrics_res) = tokio::join!(
+            perform_parallel_search(&query, &track.title, None, track.duration, http_client),
+            perform_parallel_search(
+                &query_lyrics,
+                &track.title,
+                None,
+                track.duration,
+                http_client
+            )
+        );
+        let mut combined = normal_res?;
+        if let Ok(mut l_res) = lyrics_res {
+            combined.append(&mut l_res);
+        }
+        // Deduplicate by URL
+        let mut seen = std::collections::HashSet::new();
+        combined.retain(|(candidate, _)| seen.insert(candidate.url.clone()));
+        // Re-sort by score descending
+        combined.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        combined
+    };
 
-    if let Some((best_candidate, score)) = scored.into_iter().next() {
+    if !scored.is_empty() {
+        let (best_candidate, score) = scored.remove(0);
         let settings = crate::audio::runtime::settings();
         if score >= settings.auto_pick_threshold {
             tracing::info!(
@@ -2132,14 +2217,22 @@ pub async fn resolve_ytsearch_track(
                 score,
                 "Successfully resolved ytsearch1 to real YouTube URL"
             );
-            track.url = best_candidate.url;
-            if track.thumbnail.is_none() {
-                track.thumbnail = best_candidate.thumbnail;
-            }
-            return Ok(());
+        } else {
+            tracing::info!(
+                query,
+                resolved_url = %best_candidate.url,
+                score,
+                "Resolved ytsearch1 fallback candidate using top ranking score"
+            );
         }
+        track.url = best_candidate.url.into();
+        if track.thumbnail.is_none() {
+            track.thumbnail = best_candidate.thumbnail;
+        }
+        return Ok(());
     }
 
+    // Safety fallback: if parallel search results are completely empty (rare)
     let mut candidates = YouTubeProvider.search(&query, http_client).await?;
 
     let best_candidate = if let Some(expected) = track.duration {
@@ -2169,7 +2262,7 @@ pub async fn resolve_ytsearch_track(
             resolved_url = %candidate.url,
             "Resolved ytsearch1 fallback candidate using duration sorting"
         );
-        track.url = candidate.url;
+        track.url = candidate.url.into();
         if track.thumbnail.is_none() {
             track.thumbnail = candidate.thumbnail;
         }
@@ -2206,15 +2299,15 @@ fn recursive_find_tracks(
 
             if !vid.is_empty() && seen_ids.insert(vid.to_string()) {
                 tracks.push(Track {
-                    title: title.to_string(),
-                    url: format!("https://www.youtube.com/watch?v={}", vid),
+                    title: title.into(),
+                    url: format!("https://www.youtube.com/watch?v={}", vid).into(),
                     duration: None,
                     requester_id: serenity::UserId::new(user_id),
                     requester_name: None,
                     source_type: SourceType::Playlist,
                     resolved_url: None,
                     thumbnail: None,
-                    source_provider: provider_name.to_owned(),
+                    source_provider: std::sync::Arc::from(provider_name),
                 });
             }
         } else if let Some(video) = obj.get("playlistVideoRenderer") {
@@ -2243,8 +2336,8 @@ fn recursive_find_tracks(
                 });
 
                 tracks.push(Track {
-                    title: title.to_string(),
-                    url: format!("https://www.youtube.com/watch?v={}", vid),
+                    title: title.into(),
+                    url: format!("https://www.youtube.com/watch?v={}", vid).into(),
                     duration,
                     requester_id: serenity::UserId::new(user_id),
                     requester_name: None,
@@ -2254,8 +2347,8 @@ fn recursive_find_tracks(
                         .as_array()
                         .and_then(|arr| arr.first())
                         .and_then(|t| t["url"].as_str())
-                        .map(|url| std::sync::Arc::from(url)),
-                    source_provider: provider_name.to_owned(),
+                        .map(std::sync::Arc::from),
+                    source_provider: std::sync::Arc::from(provider_name),
                 });
             }
         } else {
@@ -2284,10 +2377,10 @@ async fn resolve_youtube_playlist(
     let playlist_url = rusty_ytdl::search::Playlist::get_playlist_url(&normalized_url)
         .ok_or_else(|| SerenyaError::Audio("Invalid YouTube playlist URL".into()))?;
 
-    let provider_name = if url.contains("music.youtube.com") {
-        "YouTube Music".to_owned()
+    let provider_name: std::sync::Arc<str> = if url.contains("music.youtube.com") {
+        std::sync::Arc::from("YouTube Music")
     } else {
-        "YouTube".to_owned()
+        std::sync::Arc::from("YouTube")
     };
 
     let mut tracks = Vec::new();
@@ -2296,10 +2389,25 @@ async fn resolve_youtube_playlist(
     let is_album = url.contains("list=OLAK") || url.contains("OLAK5uy_");
 
     if !is_album {
-        if let Ok(mut playlist) = rusty_ytdl::search::Playlist::get(&playlist_url, None).await {
+        let playlist_opts = rusty_ytdl::search::PlaylistSearchOptions {
+            limit: limit as u64,
+            request_options: Some(rusty_ytdl::RequestOptions {
+                client: Some(http_client.clone()),
+                ..Default::default()
+            }),
+            fetch_all: false,
+        };
+        if let Ok(mut playlist) =
+            rusty_ytdl::search::Playlist::get(&playlist_url, Some(&playlist_opts)).await
+        {
             playlist.fetch(Some(limit as u64)).await;
 
-            let is_fake_video = playlist.videos.len() == 1 && playlist.videos.first().map(|v| v.title == "Videos").unwrap_or(false);
+            let is_fake_video = playlist.videos.len() == 1
+                && playlist
+                    .videos
+                    .first()
+                    .map(|v| v.title == "Videos")
+                    .unwrap_or(false);
             let mut valid_videos = Vec::new();
             if !is_fake_video {
                 for video in playlist.videos {
@@ -2317,14 +2425,17 @@ async fn resolve_youtube_playlist(
                     };
 
                     tracks.push(Track {
-                        title: video.title,
-                        url: video.url,
+                        title: video.title.into(),
+                        url: video.url.into(),
                         duration,
                         requester_id: serenity::UserId::new(user_id),
                         requester_name: None,
                         source_type: SourceType::Playlist,
                         resolved_url: None,
-                        thumbnail: video.thumbnails.first().map(|t| std::sync::Arc::from(t.url.as_str())),
+                        thumbnail: video
+                            .thumbnails
+                            .first()
+                            .map(|t| std::sync::Arc::from(t.url.as_str())),
                         source_provider: provider_name.clone(),
                     });
                 }
@@ -2344,33 +2455,40 @@ async fn resolve_youtube_playlist(
             "SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgOmgpwY".parse().unwrap(),
         );
 
-        if let Ok(res) = http_client.get(&normalized_url)
+        if let Ok(res) = http_client
+            .get(&normalized_url)
             .headers(headers)
             .send()
             .await
+            && let Ok(html) = res.text().await
+            && let Some(start) = html.find("ytInitialData = {")
         {
-            if let Ok(html) = res.text().await {
-                if let Some(start) = html.find("ytInitialData = {") {
-                    let json_str = &html[start + 16..];
-                    if let Some(end) = json_str.find("};</script>") {
-                        let json_data = &json_str[..=end];
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_data) {
-                            let mut seen_ids = std::collections::HashSet::new();
-                            recursive_find_tracks(&v, &mut tracks, &mut seen_ids, limit, user_id, &provider_name);
-                        }
-                    }
+            let json_str = &html[start + 16..];
+            if let Some(end) = json_str.find("};</script>") {
+                let json_data = &json_str[..=end];
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_data) {
+                    let mut seen_ids = std::collections::HashSet::new();
+                    recursive_find_tracks(
+                        &v,
+                        &mut tracks,
+                        &mut seen_ids,
+                        limit,
+                        user_id,
+                        &provider_name,
+                    );
                 }
             }
         }
     }
 
     if tracks.is_empty() {
-        return Err(SerenyaError::Audio("Failed to retrieve YouTube playlist tracks".into()));
+        return Err(SerenyaError::Audio(
+            "Failed to retrieve YouTube playlist tracks".into(),
+        ));
     }
 
     Ok(tracks)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2446,26 +2564,44 @@ mod tests {
         recursive_find_tracks(&json_data, &mut tracks, &mut seen_ids, 10, 12345, "YouTube");
 
         assert_eq!(tracks.len(), 2);
-        assert_eq!(tracks[0].title, "Test Lockup Title");
-        assert_eq!(tracks[0].url, "https://www.youtube.com/watch?v=video_id_1");
+        assert_eq!(&*tracks[0].title, "Test Lockup Title");
+        assert_eq!(
+            &*tracks[0].url,
+            "https://www.youtube.com/watch?v=video_id_1"
+        );
         assert_eq!(tracks[0].duration, None);
-        assert_eq!(tracks[0].source_provider, "YouTube");
+        assert_eq!(&*tracks[0].source_provider, "YouTube");
 
-        assert_eq!(tracks[1].title, "Test Playlist Title");
-        assert_eq!(tracks[1].url, "https://www.youtube.com/watch?v=video_id_2");
+        assert_eq!(&*tracks[1].title, "Test Playlist Title");
+        assert_eq!(
+            &*tracks[1].url,
+            "https://www.youtube.com/watch?v=video_id_2"
+        );
         assert_eq!(tracks[1].duration, Some(Duration::from_secs(225))); // 3 * 60 + 45 = 225
-        assert_eq!(tracks[1].source_provider, "YouTube");
+        assert_eq!(&*tracks[1].source_provider, "YouTube");
     }
 
     #[tokio::test]
     async fn test_live_youtube_album_resolution() {
-        let url = "https://music.youtube.com/playlist?list=OLAK5uy_nvYrn-HvzbwuVef3BcLzl70t41Warfbpw";
+        let url =
+            "https://music.youtube.com/playlist?list=OLAK5uy_nvYrn-HvzbwuVef3BcLzl70t41Warfbpw";
         let http_client = reqwest::Client::new();
-        let tracks = resolve_youtube_playlist(url, 10, 12345, &http_client).await.expect("Failed to resolve live album playlist");
+        let tracks = resolve_youtube_playlist(url, 10, 12345, &http_client)
+            .await
+            .expect("Failed to resolve live album playlist");
         assert!(!tracks.is_empty(), "Resolved tracks list is empty");
-        assert!(tracks[0].title.contains("SỢ HẠNH PHÚC QUÁ NGẮN") || tracks[0].title.contains("Sợ Hạnh Phúc Quá Ngắn") || tracks[0].title.to_lowercase().contains("hạnh phúc"), "Unexpected title: {}", tracks[0].title);
-        assert_eq!(tracks[0].url, "https://www.youtube.com/watch?v=ns878yW7N2c");
-        assert_eq!(tracks[0].source_provider, "YouTube Music");
+        assert!(
+            tracks[0].title.contains("SỢ HẠNH PHÚC QUÁ NGẮN")
+                || tracks[0].title.contains("Sợ Hạnh Phúc Quá Ngắn")
+                || tracks[0].title.to_lowercase().contains("hạnh phúc"),
+            "Unexpected title: {}",
+            tracks[0].title
+        );
+        assert_eq!(
+            &*tracks[0].url,
+            "https://www.youtube.com/watch?v=ns878yW7N2c"
+        );
+        assert_eq!(&*tracks[0].source_provider, "YouTube Music");
     }
 
     fn metadata_candidate(
@@ -2569,7 +2705,11 @@ mod tests {
             return Ok(());
         }
         let config = crate::config::load_config("config.yml").await?;
-        crate::audio::runtime::configure(&config.resolver, &config.spotify, config.playback.max_playlist_import);
+        crate::audio::runtime::configure(
+            &config.resolver,
+            &config.spotify,
+            config.playback.max_playlist_import,
+        );
 
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
@@ -2590,7 +2730,8 @@ mod tests {
             );
 
             let stream =
-                crate::audio::source::extract_stream_url_for_guild(9_001, &track.url, &http_client).await?;
+                crate::audio::source::extract_stream_url_for_guild(9_001, &track.url, &http_client)
+                    .await?;
             assert!(
                 stream.url.contains("googlevideo.com")
                     || stream.url.contains("googleusercontent.com"),
@@ -2625,7 +2766,11 @@ mod tests {
             return Ok(());
         }
         let config = crate::config::load_config("config.yml").await?;
-        crate::audio::runtime::configure(&config.resolver, &config.spotify, config.playback.max_playlist_import);
+        crate::audio::runtime::configure(
+            &config.resolver,
+            &config.spotify,
+            config.playback.max_playlist_import,
+        );
 
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))

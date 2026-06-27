@@ -17,34 +17,53 @@ pub struct NegativeCacheEntry {
     pub reason: String,
 }
 
+fn check_ytdlp_available() -> bool {
+    std::process::Command::new("yt-dlp")
+        .arg("--version")
+        .output()
+        .is_ok()
+        || std::path::Path::new("yt-dlp.exe").exists()
+        || std::path::Path::new("yt-dlp").exists()
+}
+
+fn build_negative_cache(settings: &ResolverSection) -> Cache<String, NegativeCacheEntry> {
+    Cache::builder()
+        .max_capacity(settings.negative_cache_max_capacity as u64)
+        .time_to_live(Duration::from_secs(settings.negative_cache_ttl_seconds))
+        .build()
+}
+
 struct ResolverRuntime {
     settings: ArcSwap<ResolverSection>,
     spotify_settings: ArcSwapOption<crate::config::SpotifySection>,
     ytdlp_semaphore: RwLock<Arc<Semaphore>>,
     soundcloud_semaphore: RwLock<Arc<Semaphore>>,
     guild_resolve_semaphores: DashMap<u64, Arc<Semaphore>>,
-    negative_cache: Cache<String, NegativeCacheEntry>,
+    negative_cache: ArcSwap<Cache<String, NegativeCacheEntry>>,
     youtube_degraded_until: RwLock<Option<Instant>>,
     max_playlist_import: std::sync::atomic::AtomicUsize,
+    ytdlp_fallback_active: std::sync::atomic::AtomicBool,
+    spotify_embed_fallback_active: std::sync::atomic::AtomicBool,
 }
 
 impl ResolverRuntime {
     fn new() -> Self {
         let settings = ResolverSection::default();
+        let ytdlp_active = settings.enable_ytdlp_youtube_fallback && check_ytdlp_available();
+        let spotify_active = settings.enable_spotify_embed_fallback;
         Self {
             ytdlp_semaphore: RwLock::new(Arc::new(Semaphore::new(settings.max_concurrent_ytdlp))),
             soundcloud_semaphore: RwLock::new(Arc::new(Semaphore::new(
                 settings.max_concurrent_soundcloud,
             ))),
             guild_resolve_semaphores: DashMap::new(),
-            negative_cache: Cache::builder()
-                .max_capacity(4096)
-                .time_to_live(Duration::from_secs(settings.negative_cache_ttl_seconds))
-                .build(),
+            negative_cache: ArcSwap::from_pointee(build_negative_cache(&settings)),
             settings: ArcSwap::from_pointee(settings),
             spotify_settings: ArcSwapOption::const_empty(),
             youtube_degraded_until: RwLock::new(None),
             max_playlist_import: std::sync::atomic::AtomicUsize::new(100),
+            ytdlp_fallback_active: std::sync::atomic::AtomicBool::new(ytdlp_active),
+            spotify_embed_fallback_active: std::sync::atomic::AtomicBool::new(spotify_active),
         }
     }
 }
@@ -63,6 +82,17 @@ pub fn configure(
     RESOLVER_RUNTIME
         .max_playlist_import
         .store(max_playlist_import, std::sync::atomic::Ordering::Relaxed);
+
+    let ytdlp_active = settings.enable_ytdlp_youtube_fallback && check_ytdlp_available();
+    RESOLVER_RUNTIME
+        .ytdlp_fallback_active
+        .store(ytdlp_active, std::sync::atomic::Ordering::Relaxed);
+
+    let spotify_active = settings.enable_spotify_embed_fallback;
+    RESOLVER_RUNTIME
+        .spotify_embed_fallback_active
+        .store(spotify_active, std::sync::atomic::Ordering::Relaxed);
+
     if let Ok(mut semaphore) = RESOLVER_RUNTIME.ytdlp_semaphore.write() {
         *semaphore = Arc::new(Semaphore::new(settings.max_concurrent_ytdlp));
     }
@@ -70,10 +100,17 @@ pub fn configure(
         *semaphore = Arc::new(Semaphore::new(settings.max_concurrent_soundcloud));
     }
     RESOLVER_RUNTIME.guild_resolve_semaphores.clear();
+    RESOLVER_RUNTIME
+        .negative_cache
+        .store(Arc::new(build_negative_cache(settings)));
 }
 
 pub fn cleanup_guild(guild_id: u64) {
     RESOLVER_RUNTIME.guild_resolve_semaphores.remove(&guild_id);
+}
+
+pub fn negative_cache_entry_count() -> u64 {
+    RESOLVER_RUNTIME.negative_cache.load().entry_count()
 }
 
 pub fn settings() -> Arc<ResolverSection> {
@@ -84,8 +121,22 @@ pub fn spotify_settings() -> Option<Arc<crate::config::SpotifySection>> {
     RESOLVER_RUNTIME.spotify_settings.load().clone()
 }
 
+pub fn is_ytdlp_fallback_active() -> bool {
+    RESOLVER_RUNTIME
+        .ytdlp_fallback_active
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn is_spotify_embed_fallback_active() -> bool {
+    RESOLVER_RUNTIME
+        .spotify_embed_fallback_active
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn max_playlist_import() -> usize {
-    RESOLVER_RUNTIME.max_playlist_import.load(std::sync::atomic::Ordering::Relaxed)
+    RESOLVER_RUNTIME
+        .max_playlist_import
+        .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn duration_from_millis(ms: u64) -> Duration {
@@ -272,11 +323,15 @@ fn clear_youtube_degraded_if_expired() {
 
 pub async fn remember_negative(key: String, reason: String) {
     let entry = NegativeCacheEntry { reason };
-    RESOLVER_RUNTIME.negative_cache.insert(key, entry).await;
+    RESOLVER_RUNTIME
+        .negative_cache
+        .load()
+        .insert(key, entry)
+        .await;
 }
 
 pub async fn negative_cache_get(key: &str) -> Option<NegativeCacheEntry> {
-    RESOLVER_RUNTIME.negative_cache.get(key).await
+    RESOLVER_RUNTIME.negative_cache.load().get(key).await
 }
 
 pub fn negative_cache_key(namespace: &str, id: &str) -> String {

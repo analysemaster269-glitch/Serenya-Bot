@@ -21,7 +21,6 @@ pub async fn play(
     // 1. Defer immediately to prevent Discord interaction timeout (3s deadline)
     ctx.defer().await?;
 
-    // 2. Check if user is in a voice channel
     let user_channel_id = {
         let guild = ctx
             .guild()
@@ -163,7 +162,6 @@ pub(crate) async fn enqueue_and_play_resolved(
     let requested_track_count = tracks.len();
     let show_queue_after_enqueue = requested_track_count > 1;
 
-    // Get/Create guild player
     let player_lock = ctx
         .data()
         .guild_players
@@ -180,10 +178,12 @@ pub(crate) async fn enqueue_and_play_resolved(
     let config = ctx.data().config();
     let max_queue_size = config.playback.max_queue_size;
 
-    if player.playback_status == PlaybackStatus::Idle && player.now_playing.is_none() {
-        // Play first track immediately
+    let can_play = player.now_playing.is_none()
+        && (player.playback_status == PlaybackStatus::Idle
+            || player.playback_status == PlaybackStatus::Stopped);
+    if can_play {
         let mut first_track = tracks.remove(0);
-        let requester_name = ctx.author().name.clone();
+        let requester_name: std::sync::Arc<str> = std::sync::Arc::from(ctx.author().name.as_str());
         first_track.requester_name = Some(requester_name.clone());
 
         // Fix: set requester_name for all remaining tracks before queuing
@@ -194,7 +194,6 @@ pub(crate) async fn enqueue_and_play_resolved(
         player.now_playing = Some(first_track.clone());
         player.playback_status = PlaybackStatus::Playing;
 
-        // Queue remaining tracks (if any)
         let added = player.queue.push_batch(tracks, max_queue_size)?;
 
         // Spawn background play resolution task
@@ -220,7 +219,6 @@ pub(crate) async fn enqueue_and_play_resolved(
                 {
                     tracing::error!("Failed to resolve Spotify track search: {:?}", e);
                 } else {
-                    // Update player's now_playing field with the resolved track
                     let mut player = player_lock_clone.write().await;
                     if player.playback_status == PlaybackStatus::Playing
                         && let Some(ref mut np) = player.now_playing
@@ -231,10 +229,12 @@ pub(crate) async fn enqueue_and_play_resolved(
                 }
             }
 
-            // 1. Resolve stream URL in background
-            let stream_res =
-                crate::audio::extract_stream_url_for_guild(guild_id.get(), &current_track.url, &http_client_clone)
-                    .await;
+            let stream_res = crate::audio::extract_stream_url_for_guild(
+                guild_id.get(),
+                &current_track.url,
+                &http_client_clone,
+            )
+            .await;
 
             // 2. Race condition check: check if player was reset/stopped/skipped while resolving
             {
@@ -256,7 +256,6 @@ pub(crate) async fn enqueue_and_play_resolved(
                 }
             }
 
-            // 3. Play the input
             let resolved_url = match stream_res {
                 Ok(resolved_url) => resolved_url,
                 Err(e) => {
@@ -270,11 +269,8 @@ pub(crate) async fn enqueue_and_play_resolved(
                     let announce_channel = {
                         let mut player = player_lock_clone.write().await;
                         player.consecutive_errors += 1;
-                        if player
-                            .now_playing
-                            .as_ref()
-                            .map(|current| current.url.as_str())
-                            == Some(current_track.url.as_str())
+                        if player.now_playing.as_ref().map(|current| &*current.url)
+                            == Some(&*current_track.url)
                         {
                             player.now_playing = None;
                             player.current_track_handle = None;
@@ -324,7 +320,7 @@ pub(crate) async fn enqueue_and_play_resolved(
                 player.eight_d_enabled
             };
             let source = match crate::audio::source::create_stream_input(
-                Some(current_track.url.clone()),
+                Some(current_track.url.to_string()),
                 &resolved_url,
                 eight_d_enabled,
             )
@@ -341,7 +337,6 @@ pub(crate) async fn enqueue_and_play_resolved(
             let handle = call.play_input(source);
             tracing::info!("Playback started for track: {:?}", current_track.title);
 
-            // 4. Register event handlers
             let playback_ctx = crate::audio::events::PlaybackContext {
                 guild_id,
                 database: database_clone.clone(),
@@ -359,12 +354,9 @@ pub(crate) async fn enqueue_and_play_resolved(
             );
             let _ = handle.add_event(
                 songbird::Event::Track(songbird::TrackEvent::Error),
-                TrackErrorHandler {
-                    ctx: playback_ctx,
-                },
+                TrackErrorHandler { ctx: playback_ctx },
             );
 
-            // 5. Update track handle in player
             let mut player = player_lock_clone.write().await;
             // Check race condition again
             if player.playback_status == PlaybackStatus::Playing
@@ -410,7 +402,6 @@ pub(crate) async fn enqueue_and_play_resolved(
 
                 return;
             }
-            // If check failed, stop the handle
             let _ = handle.stop();
         });
 
@@ -441,12 +432,10 @@ pub(crate) async fn enqueue_and_play_resolved(
             ctx.send(reply).await?;
         }
     } else {
-        // Enqueue all tracks
         let track_count = tracks.len();
         let first_title = tracks.first().map(|t| t.title.clone()).unwrap_or_default();
 
-        // Populate requester names
-        let requester_name = ctx.author().name.clone();
+        let requester_name: std::sync::Arc<str> = std::sync::Arc::from(ctx.author().name.as_str());
         for t in &mut tracks {
             t.requester_name = Some(requester_name.clone());
             tracing::info!("Queueing track: {:?}", t.title);
@@ -521,6 +510,12 @@ async fn queue_snapshot(
     tracks
 }
 
+enum PauseOutcome {
+    NotPlaying,
+    PausedSuccessfully,
+    NoTrackPlaying,
+}
+
 /// Pause the currently playing song.
 #[poise::command(
     slash_command,
@@ -536,37 +531,48 @@ pub async fn pause(ctx: Context<'_>) -> Result<(), Error> {
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
 
-    let mut player = player_lock.write().await;
-    if player.playback_status != PlaybackStatus::Playing {
-        let embed = crate::discord::embeds::playback_status_embed(
+    let outcome = {
+        let mut player = player_lock.write().await;
+        if player.playback_status != PlaybackStatus::Playing {
+            PauseOutcome::NotPlaying
+        } else if let Some(ref handle) = player.current_track_handle {
+            handle
+                .pause()
+                .map_err(|e| SerenyaError::Audio(format!("Failed to pause track: {}", e)))?;
+            player.playback_status = PlaybackStatus::Paused;
+            PauseOutcome::PausedSuccessfully
+        } else {
+            PauseOutcome::NoTrackPlaying
+        }
+    };
+
+    let embed = match outcome {
+        PauseOutcome::NotPlaying => crate::discord::embeds::playback_status_embed(
             "❌ Error",
             "Playback is not currently active.",
             0xED4245,
-        );
-        ctx.send(poise::CreateReply::default().embed(embed)).await?;
-        return Ok(());
-    }
-
-    if let Some(ref handle) = player.current_track_handle {
-        handle
-            .pause()
-            .map_err(|e| SerenyaError::Audio(format!("Failed to pause track: {}", e)))?;
-        player.playback_status = PlaybackStatus::Paused;
-        let embed =
-            crate::discord::embeds::playback_status_embed("⏸️ Pause", "Paused playback.", 0x5865F2);
-        ctx.send(poise::CreateReply::default().embed(embed)).await?;
-    } else {
-        let embed = crate::discord::embeds::playback_status_embed(
+        ),
+        PauseOutcome::PausedSuccessfully => {
+            crate::discord::embeds::playback_status_embed("⏸️ Pause", "Paused playback.", 0x5865F2)
+        }
+        PauseOutcome::NoTrackPlaying => crate::discord::embeds::playback_status_embed(
             "❌ Error",
             "No track is currently playing.",
             0xED4245,
-        );
-        ctx.send(poise::CreateReply::default().embed(embed)).await?;
-    }
+        ),
+    };
 
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
+}
+
+enum ResumeOutcome {
+    NotPaused,
+    ResumedSuccessfully,
+    NoTrackPaused,
 }
 
 /// Resume paused playback.
@@ -584,39 +590,43 @@ pub async fn resume(ctx: Context<'_>) -> Result<(), Error> {
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
 
-    let mut player = player_lock.write().await;
-    if player.playback_status != PlaybackStatus::Paused {
-        let embed = crate::discord::embeds::playback_status_embed(
+    let outcome = {
+        let mut player = player_lock.write().await;
+        if player.playback_status != PlaybackStatus::Paused {
+            ResumeOutcome::NotPaused
+        } else if let Some(ref handle) = player.current_track_handle {
+            handle
+                .play()
+                .map_err(|e| SerenyaError::Audio(format!("Failed to resume track: {}", e)))?;
+            player.playback_status = PlaybackStatus::Playing;
+            ResumeOutcome::ResumedSuccessfully
+        } else {
+            ResumeOutcome::NoTrackPaused
+        }
+    };
+
+    let embed = match outcome {
+        ResumeOutcome::NotPaused => crate::discord::embeds::playback_status_embed(
             "❌ Error",
             "Playback is not currently paused.",
             0xED4245,
-        );
-        ctx.send(poise::CreateReply::default().embed(embed)).await?;
-        return Ok(());
-    }
-
-    if let Some(ref handle) = player.current_track_handle {
-        handle
-            .play()
-            .map_err(|e| SerenyaError::Audio(format!("Failed to resume track: {}", e)))?;
-        player.playback_status = PlaybackStatus::Playing;
-        let embed = crate::discord::embeds::playback_status_embed(
+        ),
+        ResumeOutcome::ResumedSuccessfully => crate::discord::embeds::playback_status_embed(
             "▶️ Resume",
             "Resumed playback.",
             0x5865F2,
-        );
-        ctx.send(poise::CreateReply::default().embed(embed)).await?;
-    } else {
-        let embed = crate::discord::embeds::playback_status_embed(
+        ),
+        ResumeOutcome::NoTrackPaused => crate::discord::embeds::playback_status_embed(
             "❌ Error",
             "No track is currently paused.",
             0xED4245,
-        );
-        ctx.send(poise::CreateReply::default().embed(embed)).await?;
-    }
+        ),
+    };
 
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
 }
 
@@ -635,19 +645,26 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
 
-    let mut player = player_lock.write().await;
+    let handle_opt = {
+        let mut player = player_lock.write().await;
+        let vc = player.voice_channel;
+        let ac = player.announce_channel;
+        let handle = player.current_track_handle.take();
 
-    // Reset player state (clears queue and stops the active track)
-    let vc = player.voice_channel;
-    let ac = player.announce_channel;
+        player.reset();
 
-    player.reset();
+        player.voice_channel = vc;
+        player.announce_channel = ac;
+        player.playback_status = PlaybackStatus::Stopped;
+        handle
+    };
 
-    player.voice_channel = vc;
-    player.announce_channel = ac;
-    player.playback_status = PlaybackStatus::Stopped;
+    if let Some(ref handle) = handle_opt {
+        let _ = handle.stop();
+    }
 
     let embed = crate::discord::embeds::queue_stopped_embed();
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
@@ -793,7 +810,7 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
     let track_requester_id = player.now_playing.as_ref().map(|t| t.requester_id);
 
     let can_skip = author_id.get() == owner_id || Some(author_id) == track_requester_id;
-    
+
     // Drop write lock before checking requester absence or executing skip (which awaits and gets its own locks)
     drop(player);
 
@@ -821,8 +838,7 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
         }
 
         player.skip_forced = true;
-        let has_handle = player.current_track_handle.is_some();
-        let handle_opt = player.current_track_handle.take();
+        let handle_opt = player.current_track_handle.clone();
 
         drop(player);
 
@@ -830,10 +846,8 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
             crate::discord::embeds::playback_status_embed("⏭️ Skip", "Skipping track...", 0x5865F2);
         ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
-        if has_handle {
-            if let Some(handle) = handle_opt {
-                let _ = handle.stop();
-            }
+        if let Some(handle) = handle_opt {
+            let _ = handle.stop();
         } else {
             crate::audio::events::play_next(
                 crate::audio::events::PlaybackContext {

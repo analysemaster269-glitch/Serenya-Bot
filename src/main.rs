@@ -1,3 +1,11 @@
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
+#[cfg(not(feature = "dhat-heap"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod audio;
 mod commands;
 mod config;
@@ -23,9 +31,7 @@ use crate::database::DatabaseManager;
 pub struct Data {
     pub config: arc_swap::ArcSwap<BotConfig>,
     pub database: Arc<DatabaseManager>,
-    pub guild_players: Arc<
-        DashMap<serenity::GuildId, std::sync::Arc<tokio::sync::RwLock<crate::core::GuildPlayer>>>,
-    >,
+    pub guild_players: Arc<DashMap<serenity::GuildId, Arc<tokio::sync::RwLock<core::GuildPlayer>>>>,
     pub http_client: reqwest::Client,
     pub start_time: std::time::Instant,
 }
@@ -37,10 +43,12 @@ impl Data {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     configure_path();
-    // Install the default CryptoProvider for rustls to prevent panic when both aws-lc-rs and ring features are enabled in the workspace
     let _ = rustls::crypto::ring::default_provider().install_default();
-    tokio::runtime::Runtime::new().unwrap().block_on(run())
+    tokio::runtime::Runtime::new()?.block_on(run())
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,18 +57,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(config::load_config("config.yml").await?);
 
     // Register secrets for redaction
-    crate::logging::register_secret_to_redact(&config.bot.token);
+    logging::register_secret_to_redact(&config.bot.token);
     if let Some(ref cookie) = config.spotify.sp_dc {
-        crate::logging::register_secret_to_redact(cookie);
+        logging::register_secret_to_redact(cookie);
     }
     if let Some(ref url) = config.logging.webhook_url {
-        crate::logging::register_secret_to_redact(url);
+        logging::register_secret_to_redact(url);
     }
     if let Some(ref url) = config.bot.log_webhook_url {
-        crate::logging::register_secret_to_redact(url);
+        logging::register_secret_to_redact(url);
     }
 
-    audio::runtime::configure(&config.resolver, &config.spotify, config.playback.max_playlist_import);
+    audio::runtime::configure(
+        &config.resolver,
+        &config.spotify,
+        config.playback.max_playlist_import,
+    );
     init_tracing(&config.logging);
     info!(target: "start", "Starting Serenya...");
     info!(target: "start", instance_id = %config.bot.instance_id, "Configuration loaded");
@@ -92,7 +104,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     Box::pin(async move {
                         let default_prefix = ctx.data.config().bot.prefix.clone();
                         if let Some(guild_id) = ctx.guild_id {
-                            let prefix = ctx.data.database.get_guild_prefix(guild_id.get(), &default_prefix);
+                            let prefix = ctx
+                                .data
+                                .database
+                                .get_guild_prefix(guild_id.get(), &default_prefix);
                             return Ok(Some(prefix.to_string()));
                         }
                         Ok(Some(default_prefix))
@@ -134,7 +149,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         serenity::FullEvent::GuildDelete { incomplete, .. } => {
                             let guild_id = incomplete.id;
-                            crate::audio::runtime::cleanup_guild(guild_id.get());
+                            audio::runtime::cleanup_guild(guild_id.get());
                             data.guild_players.remove(&guild_id);
                             info!(guild_id = %guild_id, "Guild removed — cleaned up runtime state");
                         }
@@ -143,9 +158,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             let config = data.config();
                             let default_prefix = config.bot.prefix.as_str();
                             let prefix = if let Some(guild_id) = new_message.guild_id {
-                                data.database.get_guild_prefix(guild_id.get(), default_prefix)
+                                data.database
+                                    .get_guild_prefix(guild_id.get(), default_prefix)
                             } else {
-                                std::sync::Arc::from(default_prefix)
+                                Arc::from(default_prefix)
                             };
 
                             if content.starts_with(prefix.as_ref()) {
@@ -189,9 +205,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 info!(target: "start", "Slash commands registered globally");
 
-                let guild_players = std::sync::Arc::new(DashMap::new());
+                let guild_players = Arc::new(DashMap::new());
 
-                start_empty_room_monitor(guild_players.clone(), ctx.http.clone());
+                start_empty_room_monitor(
+                    guild_players.clone(),
+                    ctx.http.clone(),
+                    config_clone.clone(),
+                    ctx.clone(),
+                );
 
                 Ok(Data {
                     config: arc_swap::ArcSwap::new(config_clone),
@@ -204,15 +225,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build();
 
-    let intents = serenity::GatewayIntents::non_privileged()
-        | serenity::GatewayIntents::MESSAGE_CONTENT
-        | serenity::GatewayIntents::GUILD_VOICE_STATES;
+    let intents = serenity::GatewayIntents::GUILDS
+        | serenity::GatewayIntents::GUILD_VOICE_STATES
+        | serenity::GatewayIntents::GUILD_MESSAGES
+        | serenity::GatewayIntents::MESSAGE_CONTENT;
 
     let songbird_config = songbird::Config::default()
         .use_softclip(false)
         .preallocated_tracks(2);
+    let mut cache_settings = serenity::cache::Settings::default();
+    cache_settings.max_messages = 0;
     let mut client = serenity::ClientBuilder::new(&config.bot.token, intents)
         .framework(framework)
+        .cache_settings(cache_settings)
         .register_songbird_from_config(songbird_config)
         .await?;
 
@@ -259,7 +284,6 @@ async fn shutdown(
 
     cancel_token.cancel();
 
-    // Wait for auto-save task to finish
     if let Err(err) = auto_save_handle.await {
         error!(%err, "Auto-save task panicked during shutdown");
     }
@@ -270,8 +294,7 @@ async fn shutdown(
 
     info!(target: "shutdown", "Serenya shut down gracefully");
 
-    // Flush webhook logs before exiting
-    crate::logging::webhook::shutdown().await;
+    logging::webhook::shutdown().await;
 }
 
 /// Appends the `bin/` subdirectory (relative to CWD) to the process PATH.
@@ -292,7 +315,7 @@ fn configure_path() {
     }
 }
 
-fn init_tracing(logging: &crate::config::LoggingSection) {
+fn init_tracing(logging: &config::LoggingSection) {
     use crate::logging::MakeRedactingWriter;
     use tracing::Level;
     use tracing_subscriber::EnvFilter;
@@ -348,35 +371,34 @@ async fn on_error(error: poise::FrameworkError<'_, Data, utils::Error>) {
     match error {
         poise::FrameworkError::Command { error, ctx, .. } => {
             error!(%error, command = ctx.command().name, "Command error");
-            let message = if let Some(serenya_err) =
-                error.downcast_ref::<crate::utils::error::SerenyaError>()
-            {
-                match serenya_err {
-                    crate::utils::error::SerenyaError::Permission(msg) => {
-                        format!("**Permission Denied:** {msg}")
+            let message =
+                if let Some(serenya_err) = error.downcast_ref::<utils::error::SerenyaError>() {
+                    match serenya_err {
+                        utils::error::SerenyaError::Permission(msg) => {
+                            format!("**Permission Denied:** {msg}")
+                        }
+                        utils::error::SerenyaError::NotFound(msg) => {
+                            format!("**Not Found:** {msg}")
+                        }
+                        utils::error::SerenyaError::Voice(msg) => {
+                            format!("**Voice Connection Error:** {msg}")
+                        }
+                        utils::error::SerenyaError::Queue(msg) => {
+                            format!("**Queue Error:** {msg}")
+                        }
+                        utils::error::SerenyaError::Database(msg) => {
+                            format!("**Database Error:** {msg}")
+                        }
+                        utils::error::SerenyaError::Config(msg) => {
+                            format!("**Configuration Error:** {msg}")
+                        }
+                        other => format!("{other}"),
                     }
-                    crate::utils::error::SerenyaError::NotFound(msg) => {
-                        format!("**Not Found:** {msg}")
-                    }
-                    crate::utils::error::SerenyaError::Voice(msg) => {
-                        format!("**Voice Connection Error:** {msg}")
-                    }
-                    crate::utils::error::SerenyaError::Queue(msg) => {
-                        format!("**Queue Error:** {msg}")
-                    }
-                    crate::utils::error::SerenyaError::Database(msg) => {
-                        format!("**Database Error:** {msg}")
-                    }
-                    crate::utils::error::SerenyaError::Config(msg) => {
-                        format!("**Configuration Error:** {msg}")
-                    }
-                    other => format!("{other}"),
-                }
-            } else {
-                error.to_string()
-            };
+                } else {
+                    error.to_string()
+                };
 
-            let embed = crate::discord::embeds::error_embed(&message);
+            let embed = discord::embeds::error_embed(&message);
             let reply = poise::CreateReply::default().embed(embed).ephemeral(true);
             let _ = ctx.send(reply).await;
         }
@@ -392,10 +414,10 @@ async fn on_error(error: poise::FrameworkError<'_, Data, utils::Error>) {
 }
 
 fn start_empty_room_monitor(
-    guild_players: Arc<
-        DashMap<serenity::GuildId, Arc<tokio::sync::RwLock<crate::core::GuildPlayer>>>,
-    >,
+    guild_players: Arc<DashMap<serenity::GuildId, Arc<tokio::sync::RwLock<core::GuildPlayer>>>>,
     http: Arc<serenity::Http>,
+    config: Arc<BotConfig>,
+    serenity_ctx: serenity::Context,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -415,33 +437,53 @@ fn start_empty_room_monitor(
                 let player = player_lock.read().await;
                 if let Some(empty_since) = player.empty_since
                     && now.duration_since(empty_since).as_secs() >= 10800
+                    && (!player.queue.is_empty()
+                        || player.playback_status != core::PlaybackStatus::Idle)
                 {
-                    // 3 hours
-                    if !player.queue.is_empty()
-                        || player.playback_status != crate::core::PlaybackStatus::Idle
-                    {
-                        to_clear.push((guild_id, player.announce_channel));
-                    }
+                    to_clear.push((guild_id, player.announce_channel));
                 }
             }
 
             for (guild_id, announce_channel) in to_clear {
-                if let Some(player_lock) = guild_players.get(&guild_id) {
-                    let mut player = player_lock.write().await;
-                    player.reset();
-                    // Notice we keep empty_since as is (or reset it to Some(now) implicitly?
-                    // Actually, reset() clears empty_since, so we should set it back to maintain
-                    // the empty state, otherwise it might trigger repeatedly or lose state.
-                    // Wait, if we cleared the queue, it's empty, so we don't care if empty_since is reset.
-                    // It will be re-evaluated next voice update, or we just leave it as Some(now) to prevent re-clearing.
-                    player.empty_since = Some(now);
+                let player_lock_opt = guild_players.get(&guild_id).map(|p| p.value().clone());
+                if let Some(player_lock) = player_lock_opt {
+                    let stay = config.playback.stay_in_voice;
 
-                    crate::audio::runtime::cleanup_guild(guild_id.get());
-                    info!(guild_id = %guild_id, "Cleared queue after 3 hours of empty room");
+                    {
+                        let mut player = player_lock.write().await;
+                        player.reset();
+                        if !stay {
+                            player.voice_channel = None;
+                            player.announce_channel = None;
+                        } else {
+                            // Keep voice_channel/announce_channel but mark empty_since
+                            // so we don't re-trigger until someone joins again
+                            player.empty_since = Some(now);
+                        }
+                    }
+
+                    if stay {
+                        // stay_in_voice = true: only clear queue, keep the voice connection
+                        audio::runtime::cleanup_guild(guild_id.get());
+                        info!(guild_id = %guild_id, "Cleared queue after 3 hours of empty room (staying in voice)");
+                    } else {
+                        // stay_in_voice = false: fully disconnect
+                        guild_players.remove(&guild_id);
+                        if let Some(manager) = songbird::get(&serenity_ctx).await {
+                            let _ = manager.remove(guild_id).await;
+                        }
+                        audio::runtime::cleanup_guild(guild_id.get());
+                        info!(guild_id = %guild_id, "Disconnected after 3 hours of empty room");
+                    }
 
                     if let Some(channel) = announce_channel {
+                        let description = if stay {
+                            "Đã 3 tiếng không có ai trong phòng, hàng chờ (queue) đã tự động được dọn dẹp để tiết kiệm tài nguyên."
+                        } else {
+                            "Đã 3 tiếng không có ai trong phòng, bot đã tự động rời kênh thoại để tiết kiệm tài nguyên."
+                        };
                         let embed = serenity::CreateEmbed::new()
-                            .description("Đã 3 tiếng không có ai trong phòng, hàng chờ (queue) đã tự động được dọn dẹp để tiết kiệm tài nguyên.")
+                            .description(description)
                             .color(0xED4245);
                         let _ = channel
                             .send_message(&http, serenity::CreateMessage::new().embed(embed))
@@ -458,13 +500,12 @@ async fn handle_voice_state_update(
     _old: &Option<serenity::VoiceState>,
     new: &serenity::VoiceState,
     data: &Data,
-) -> Result<(), crate::utils::Error> {
+) -> Result<(), utils::Error> {
     let guild_id = match new.guild_id {
         Some(g) => g,
         None => return Ok(()),
     };
 
-    // 1. Get the guild player. If there is no player, we don't care.
     let player_lock = match data.guild_players.get(&guild_id) {
         Some(p) => p.value().clone(),
         None => return Ok(()),
@@ -481,15 +522,14 @@ async fn handle_voice_state_update(
         )
     };
 
-    // 3. Get the bot's current voice channel
     let bot_channel_id = match bot_channel_id {
         Some(c) => c,
         None => {
             // If the bot has left the voice channel and queue is empty, remove player memory
-            if queue_is_empty && playback_status == crate::core::PlaybackStatus::Idle {
+            if queue_is_empty && playback_status == core::PlaybackStatus::Idle {
                 data.guild_players.remove(&guild_id);
-                crate::audio::runtime::cleanup_guild(guild_id.get());
-                tracing::info!(
+                audio::runtime::cleanup_guild(guild_id.get());
+                info!(
                     guild_id = %guild_id,
                     "Bot is not in voice and queue is empty, removed GuildPlayer"
                 );
@@ -498,7 +538,6 @@ async fn handle_voice_state_update(
         }
     };
 
-    // 4. Get bot user ID
     let bot_id = ctx.cache.current_user().id;
 
     // 5. Count human members in the voice channel (without holding lock)
@@ -528,14 +567,14 @@ async fn handle_voice_state_update(
             player.empty_since = Some(std::time::Instant::now());
         }
 
-        if player.playback_status == crate::core::PlaybackStatus::Playing
+        if player.playback_status == core::PlaybackStatus::Playing
             && let Some(ref handle) = player.current_track_handle
         {
             let should_announce = if let Err(e) = handle.pause() {
-                tracing::error!("Failed to auto-pause track in empty channel: {:?}", e);
+                error!("Failed to auto-pause track in empty channel: {:?}", e);
                 false
             } else {
-                player.playback_status = crate::core::PlaybackStatus::Paused;
+                player.playback_status = core::PlaybackStatus::Paused;
                 info!(
                     guild_id = %guild_id,
                     channel_id = %bot_channel_id,

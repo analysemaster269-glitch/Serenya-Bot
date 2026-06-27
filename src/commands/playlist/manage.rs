@@ -88,19 +88,21 @@ pub async fn info(
 
     ctx.defer().await?;
 
+    let req_name: std::sync::Arc<str> = std::sync::Arc::from(ctx.author().name.as_str());
+    let source_prov: std::sync::Arc<str> = std::sync::Arc::from("Playlist");
     let tracks: Vec<crate::core::Track> = playlist
         .tracks
         .iter()
         .map(|t| crate::core::Track {
-            title: t.title.clone(),
-            url: t.url.clone(),
+            title: t.title.as_str().into(),
+            url: t.url.as_str().into(),
             duration: t.duration_secs.map(Duration::from_secs),
             requester_id: serenity::UserId::new(user_id),
-            requester_name: Some(ctx.author().name.clone()),
+            requester_name: Some(req_name.clone()),
             source_type: crate::core::track::SourceType::Playlist,
             resolved_url: None,
             thumbnail: None,
-            source_provider: "Playlist".to_owned(),
+            source_provider: source_prov.clone(),
         })
         .collect();
 

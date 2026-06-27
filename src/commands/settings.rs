@@ -70,7 +70,6 @@ pub async fn quality(
 
     let quality_mode = Quality::from_str(&mode)?;
 
-    // 1. Get guild to check premium boost tier
     let premium_tier = {
         let guild = ctx
             .guild()
@@ -78,7 +77,6 @@ pub async fn quality(
         guild.premium_tier
     };
 
-    // 2. Validate boost tier requirements
     match quality_mode {
         Quality::Premium => {
             if premium_tier < serenity::PremiumTier::Tier2 {
@@ -101,13 +99,11 @@ pub async fn quality(
         _ => {}
     }
 
-    // 3. Save quality to guild settings
     let db = &ctx.data().database;
     let mut settings = db.get_guild_settings(guild_id.get()).await;
     settings.quality = quality_mode.to_str().to_owned();
     db.update_guild_settings(guild_id.get(), settings).await;
 
-    // 4. Calculate target bitrate for the voice channel based on premium tier limits
     let raw_bitrate = quality_mode.to_bitrate();
     let max_tier_bitrate = match premium_tier {
         serenity::PremiumTier::Tier3 => 384_000,
@@ -116,45 +112,54 @@ pub async fn quality(
         _ => 96_000,
     };
     let target_bitrate = if raw_bitrate == 0 {
-        0 // dynamic
+        0
     } else {
         raw_bitrate.min(max_tier_bitrate)
     };
 
-    // 5. Update active voice channel bitrate and Songbird encoder
-    let player_lock = ctx.data().guild_players.get(&guild_id);
+    let player_lock = ctx
+        .data()
+        .guild_players
+        .get(&guild_id)
+        .map(|r| r.value().clone());
 
-    if let Some(player_lock) = player_lock {
+    let voice_channel = if let Some(ref player_lock) = player_lock {
         let player = player_lock.read().await;
-        if let Some(vc_id) = player.voice_channel {
-            // Edit Discord channel bitrate if not Auto
-            if quality_mode != Quality::Auto {
-                let _ = vc_id
-                    .edit(
-                        &ctx.serenity_context().http,
-                        serenity::EditChannel::new().bitrate(target_bitrate),
-                    )
-                    .await;
-            }
+        player.voice_channel
+    } else {
+        None
+    };
 
-            // Update Songbird encoder bitrate if connected
-            let manager = songbird::get(ctx.serenity_context())
-                .await
-                .ok_or_else(|| SerenyaError::Voice("Songbird manager not initialized".into()))?
-                .clone();
-            if let Some(call_lock) = manager.get(guild_id) {
-                let mut call = call_lock.lock().await;
-                if quality_mode == Quality::Auto {
-                    if let Ok(serenity::Channel::Guild(channel)) =
-                        vc_id.to_channel(&ctx.serenity_context().http).await
-                    {
-                        let ch_bitrate = channel.bitrate.unwrap_or(64_000);
-                        call.set_bitrate(songbird::driver::Bitrate::Bits(ch_bitrate as i32));
-                    }
+    if let Some(vc_id) = voice_channel {
+        if quality_mode != Quality::Auto {
+            let _ = vc_id
+                .edit(
+                    &ctx.serenity_context().http,
+                    serenity::EditChannel::new().bitrate(target_bitrate),
+                )
+                .await;
+        }
+
+        let manager = songbird::get(ctx.serenity_context())
+            .await
+            .ok_or_else(|| SerenyaError::Voice("Songbird manager not initialized".into()))?
+            .clone();
+
+        if let Some(call_lock) = manager.get(guild_id) {
+            let ch_bitrate = if quality_mode == Quality::Auto {
+                if let Ok(serenity::Channel::Guild(channel)) =
+                    vc_id.to_channel(&ctx.serenity_context().http).await
+                {
+                    channel.bitrate.unwrap_or(64_000)
                 } else {
-                    call.set_bitrate(songbird::driver::Bitrate::Bits(target_bitrate as i32));
+                    64_000
                 }
-            }
+            } else {
+                target_bitrate
+            };
+
+            let mut call = call_lock.lock().await;
+            call.set_bitrate(songbird::driver::Bitrate::Bits(ch_bitrate as i32));
         }
     }
 

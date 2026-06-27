@@ -91,8 +91,14 @@ pub struct ResolverSection {
     pub metadata_cache_ttl_seconds: u64,
     pub stream_cache_ttl_seconds: u64,
     pub negative_cache_ttl_seconds: u64,
+    pub query_cache_max_capacity: usize,
+    pub metadata_cache_max_capacity: usize,
+    pub stream_cache_max_capacity: usize,
+    pub negative_cache_max_capacity: usize,
     pub auto_pick_threshold: f64,
     pub perfect_threshold: f64,
+    pub enable_ytdlp_youtube_fallback: bool,
+    pub enable_spotify_embed_fallback: bool,
 }
 
 impl Default for ResolverSection {
@@ -101,23 +107,29 @@ impl Default for ResolverSection {
             max_concurrent_ytdlp: 2,
             max_concurrent_resolves_per_guild: 2,
             max_concurrent_soundcloud: 4,
-            global_search_timeout_ms: 1800,
+            global_search_timeout_ms: 3500,
             deezer_timeout_ms: 800,
             apple_music_timeout_ms: 800,
-            youtube_music_timeout_ms: 1000,
-            soundcloud_timeout_ms: 1500,
+            youtube_music_timeout_ms: 2000,
+            soundcloud_timeout_ms: 2000,
             spotify_timeout_ms: 800,
-            youtube_timeout_ms: 1500,
+            youtube_timeout_ms: 2000,
             ytsearch_timeout_ms: 3000,
             yt_dlp_timeout_seconds: 10,
             prefetch_timeout_seconds: 8,
             prefetch_when_remaining_seconds: 10,
-            query_cache_ttl_seconds: 3600,
-            metadata_cache_ttl_seconds: 86400,
-            stream_cache_ttl_seconds: 3600,
-            negative_cache_ttl_seconds: 1800,
+            query_cache_ttl_seconds: 300,
+            metadata_cache_ttl_seconds: 300,
+            stream_cache_ttl_seconds: 300,
+            negative_cache_ttl_seconds: 120,
+            query_cache_max_capacity: 512,
+            metadata_cache_max_capacity: 512,
+            stream_cache_max_capacity: 256,
+            negative_cache_max_capacity: 256,
             auto_pick_threshold: 0.90,
             perfect_threshold: 0.97,
+            enable_ytdlp_youtube_fallback: false,
+            enable_spotify_embed_fallback: true,
         }
     }
 }
@@ -274,7 +286,7 @@ mod tests {
             spotify: test_spotify(),
             playback: test_playback(),
             resolver: ResolverSection::default(),
-            emojis: Some(crate::config::EmojisSection::default()),
+            emojis: Some(EmojisSection::default()),
         };
         assert!(validate_config(&config).is_err());
     }
@@ -296,7 +308,7 @@ mod tests {
             spotify: test_spotify(),
             playback: test_playback(),
             resolver: ResolverSection::default(),
-            emojis: Some(crate::config::EmojisSection::default()),
+            emojis: Some(EmojisSection::default()),
         };
         assert!(validate_config(&config).is_err());
     }
@@ -318,7 +330,7 @@ mod tests {
             spotify: test_spotify(),
             playback: test_playback(),
             resolver: ResolverSection::default(),
-            emojis: Some(crate::config::EmojisSection::default()),
+            emojis: Some(EmojisSection::default()),
         };
         assert!(validate_config(&config).is_err());
     }
@@ -340,7 +352,7 @@ mod tests {
             spotify: test_spotify(),
             playback: test_playback(),
             resolver: ResolverSection::default(),
-            emojis: Some(crate::config::EmojisSection::default()),
+            emojis: Some(EmojisSection::default()),
         };
         assert!(validate_config(&config).is_ok());
     }

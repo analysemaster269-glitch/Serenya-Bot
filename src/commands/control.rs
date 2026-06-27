@@ -14,7 +14,6 @@ pub(crate) async fn seek_by_restart(
     player_lock: std::sync::Arc<tokio::sync::RwLock<crate::core::GuildPlayer>>,
     target_position: Duration,
 ) -> Result<(), Error> {
-    // 1. Get the stream URL of the current track
     let (url, resolved_url) = {
         let player = player_lock.read().await;
         let track = player
@@ -27,7 +26,12 @@ pub(crate) async fn seek_by_restart(
     let stream = match resolved_url {
         Some(stream) => stream,
         None => std::sync::Arc::new(
-            crate::audio::source::extract_stream_url_for_guild(guild_id.get(), &url, &ctx.data().http_client).await?,
+            crate::audio::source::extract_stream_url_for_guild(
+                guild_id.get(),
+                &url,
+                &ctx.data().http_client,
+            )
+            .await?,
         ),
     };
 
@@ -36,14 +40,13 @@ pub(crate) async fn seek_by_restart(
         player.eight_d_enabled
     };
     let source = crate::audio::source::create_ffmpeg_stream_input(
-        Some(url.clone()),
+        Some(url.to_string()),
         &stream,
         Some(target_position),
         eight_d_enabled,
     )
     .await?;
 
-    // 3. Stop the current track and play the new input
     let manager = songbird::get(ctx.serenity_context())
         .await
         .ok_or_else(|| SerenyaError::Voice("Songbird manager not initialized.".into()))?
@@ -66,7 +69,6 @@ pub(crate) async fn seek_by_restart(
         call.play_input(source)
     };
 
-    // 4. Register event handlers
     let playback_ctx = crate::audio::events::PlaybackContext {
         guild_id,
         database: std::sync::Arc::clone(&ctx.data().database),
@@ -84,23 +86,15 @@ pub(crate) async fn seek_by_restart(
         end_handler,
     );
 
-    let error_handler = crate::audio::events::TrackErrorHandler {
-        ctx: playback_ctx,
-    };
+    let error_handler = crate::audio::events::TrackErrorHandler { ctx: playback_ctx };
     let _ = handle.add_event(
         songbird::Event::Track(songbird::TrackEvent::Error),
         error_handler,
     );
 
-    // 5. Update player's track handle
     {
         let mut player = player_lock.write().await;
-        if player
-            .now_playing
-            .as_ref()
-            .map(|current| current.url.as_str())
-            == Some(url.as_str())
-        {
+        if player.now_playing.as_ref().map(|current| &*current.url) == Some(&*url) {
             player.current_track_handle = Some(handle.clone());
         } else {
             let _ = handle.stop();
@@ -136,8 +130,8 @@ pub async fn seek(
         .data()
         .guild_players
         .get(&guild_id)
-        .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?
-        .clone();
+        .map(|r| r.value().clone())
+        .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
 
     seek_by_restart(ctx, guild_id, player_lock, duration).await?;
     let embed = crate::discord::embeds::playback_status_embed(
@@ -149,7 +143,7 @@ pub async fn seek(
     Ok(())
 }
 
-/// Fast forward the song by a duration.
+/// Fast-forward the song by a duration.
 #[poise::command(
     slash_command,
     prefix_command,
@@ -173,8 +167,8 @@ pub async fn forward(
         .data()
         .guild_players
         .get(&guild_id)
-        .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?
-        .clone();
+        .map(|r| r.value().clone())
+        .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
 
     let (handle, seek_offset) = {
         let player = player_lock.read().await;
@@ -228,8 +222,8 @@ pub async fn rewind(
         .data()
         .guild_players
         .get(&guild_id)
-        .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?
-        .clone();
+        .map(|r| r.value().clone())
+        .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
 
     let (handle, seek_offset) = {
         let player = player_lock.read().await;
@@ -273,6 +267,7 @@ pub async fn replay(ctx: Context<'_>) -> Result<(), Error> {
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
     let mut player = player_lock.write().await;
 
@@ -336,6 +331,7 @@ pub async fn previous(ctx: Context<'_>) -> Result<(), Error> {
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
     let mut player = player_lock.write().await;
 
@@ -344,6 +340,7 @@ pub async fn previous(ctx: Context<'_>) -> Result<(), Error> {
         .take()
         .ok_or_else(|| SerenyaError::NotFound("No previous track found.".into()))?;
 
+    player.cancel_prefetch();
     if let Some(mut curr) = player.now_playing.take() {
         curr.resolved_url = None;
         player.queue.push_front(curr);
@@ -353,8 +350,7 @@ pub async fn previous(ctx: Context<'_>) -> Result<(), Error> {
     player.queue.push_front(prev_to_play);
 
     player.skip_forced = true;
-    let has_handle = player.current_track_handle.is_some();
-    let handle_opt = player.current_track_handle.take();
+    let handle_opt = player.current_track_handle.clone();
 
     drop(player);
 
@@ -365,10 +361,8 @@ pub async fn previous(ctx: Context<'_>) -> Result<(), Error> {
     );
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
-    if has_handle {
-        if let Some(handle) = handle_opt {
-            let _ = handle.stop();
-        }
+    if let Some(handle) = handle_opt {
+        let _ = handle.stop();
     } else {
         crate::audio::events::play_next(
             crate::audio::events::PlaybackContext {
@@ -405,6 +399,7 @@ pub async fn jump(
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
     let mut player = player_lock.write().await;
     let queue_len = player.queue.len();
@@ -439,10 +434,10 @@ pub async fn jump(
         position - 1
     };
 
+    player.cancel_prefetch();
     let skipped = player.queue.jump(index)?;
     player.skip_forced = true;
-    let has_handle = player.current_track_handle.is_some();
-    let handle_opt = player.current_track_handle.take();
+    let handle_opt = player.current_track_handle.clone();
 
     drop(player);
 
@@ -456,10 +451,8 @@ pub async fn jump(
     );
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
-    if has_handle {
-        if let Some(handle) = handle_opt {
-            let _ = handle.stop();
-        }
+    if let Some(handle) = handle_opt {
+        let _ = handle.stop();
     } else {
         crate::audio::events::play_next(
             crate::audio::events::PlaybackContext {
@@ -496,6 +489,7 @@ pub async fn r#move(
         .data()
         .guild_players
         .get(&guild_id)
+        .map(|r| r.value().clone())
         .ok_or_else(|| SerenyaError::NotFound("No player active in this server.".into()))?;
     let mut player = player_lock.write().await;
     let queue_len = player.queue.len();
@@ -521,8 +515,15 @@ pub async fn r#move(
         (from - 1, to - 1)
     };
 
+    player.cancel_prefetch();
     player.queue.move_item(from_idx, to_idx)?;
     drop(player);
+
+    let gp_clone = ctx.data().guild_players.clone();
+    let http_client_clone = ctx.data().http_client.clone();
+    tokio::spawn(async move {
+        crate::audio::events::trigger_prefetch(guild_id, gp_clone, http_client_clone).await;
+    });
     let embed = crate::discord::embeds::playback_status_embed(
         "↕️ Move",
         &format!("Moved track from #{from} to #{to}."),

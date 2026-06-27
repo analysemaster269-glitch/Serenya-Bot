@@ -1,6 +1,6 @@
 [package]
 name = "serenya"
-version = "1.1.1"
+version = "1.1.4"
 edition = "2024"
 rust-version = "1.96.0"
 description = "A multi-guild Discord music bot"
@@ -15,7 +15,7 @@ tracing = { version = "0.1" }
 async-trait = { version = "0.1" }
 moka = { version = "0.12", features = ["future"] }
 sha1 = { version = "0.10" }
-boa_engine = { version = "0.21.0" }
+rquickjs = { version = "0.6", features = ["macro"] }
 url = { version = "2" }
 regex = { version = "1" }
 rand = { version = "0.9" }
@@ -42,6 +42,7 @@ async-trait = { workspace = true }
 serde_json = { workspace = true }
 hmac = "0.12"
 sha1 = { workspace = true }
+mimalloc = { version = "0.1", default-features = false }
 symphonia = { version = "0.5.2", features = ["aac", "isomp4", "mp3", "mkv", "ogg", "vorbis", "wav"] }
 moka = { workspace = true }
 youtube_resolver = { path = "crates/youtube_resolver" }
@@ -52,6 +53,10 @@ percent-encoding = "2"
 arc-swap = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 aho-corasick = "1.1.4"
+dhat = { version = "0.3", optional = true }
+
+[features]
+dhat-heap = ["dep:dhat"]
 
 [profile.release]
 opt-level = 3
@@ -68,7 +73,7 @@ strip = false
 inherits = "release"
 strip = true
 
-# Optimize dependencies in dev mode for much faster startup and run times (e.g. boa_engine)
+# Optimize dependencies in dev mode for much faster startup and run times (e.g. rquickjs)
 [profile.dev.package."*"]
 opt-level = 3
 

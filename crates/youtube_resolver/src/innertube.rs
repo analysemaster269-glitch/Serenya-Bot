@@ -78,16 +78,14 @@ impl InnerTubeClient for BaseInnerTubeClient {
         video_id: &str,
         context: &ResolveContext,
     ) -> Result<PlayerResponse, ResolveError> {
-        let http_client = reqwest::Client::builder()
-            .timeout(context.timeout)
-            .build()?;
-        let session = resolve_session(context, &http_client).await?;
+        let session = resolve_session(context, &context.http_client).await?;
         let headers = self.build_headers(context, &session)?;
         let payload = self.build_payload(video_id, context, &session);
-        let response_text = http_client
+        let response_text = context.http_client
             .post("https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8")
             .headers(headers)
             .json(&payload)
+            .timeout(context.timeout)
             .send()
             .await?
             .text()
