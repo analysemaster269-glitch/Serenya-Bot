@@ -32,16 +32,22 @@ fi
 export RUSTFLAGS="-C profile-generate=$PGO_DIR -C target-cpu=native -C llvm-args=-vp-counters-per-site=6"
 cargo build --profile pgo-gen $VERBOSE_FLAG
 
-# 3. Instruction to collect profile data
+# 3. Start bot to collect profile data
 echo ""
 echo -e "\e[36m================================================================================\e[0m"
 echo -e "\e[36mSTEP 3: RUN WORKLOAD TO GENERATE PROFILE DATA\e[0m"
-echo -e "\e[36mPlease run the compiled binary under realistic workloads to gather profiles.\e[0m"
-echo -e "\e[36mExample: Run the bot and play several tracks, search songs, etc.\e[0m"
-echo -e "\e[36mThe binary is located at: ./target/pgo-gen/serenya\e[0m"
-echo -e "\e[36mPress Enter when you are done running the bot and want to build the optimized binary.\e[0m"
+echo -e "\e[32mStarting the bot in the background to gather profiles...\e[0m"
+./target/pgo-gen/serenya > target/pgo-bot.log 2>&1 &
+BOT_PID=$!
+echo -e "\e[90mStarted bot process (PID: $BOT_PID). Logs are at target/pgo-bot.log\e[0m"
+echo -e "\e[36mPlease play several tracks, search songs, etc. on Discord to generate profile data.\e[0m"
+echo -e "\e[36mPress Enter when you are done and want to build the optimized binary.\e[0m"
 echo -e "\e[36m================================================================================\e[0m"
-read -r -p "Press Enter to continue..."
+read -r -p "Press Enter to stop the bot and continue..."
+
+echo -e "\e[32mStopping bot process (PID: $BOT_PID)...\e[0m"
+kill "$BOT_PID" || true
+wait "$BOT_PID" 2>/dev/null || true
 
 # 4. Locate llvm-profdata tool
 echo -e "\e[32mStep 4: Locating llvm-profdata tool...\e[0m"

@@ -52,16 +52,22 @@ if ($VerboseOutput) {
 $Env:RUSTFLAGS = "-C profile-generate=$PGO_DIR -C target-cpu=native -C llvm-args=-vp-counters-per-site=6"
 cargo build --profile pgo-gen @CargoFlags
 
-# 3. Instruction to collect profile data
+# 3. Start bot to collect profile data
 Write-Host ""
 Write-Host "================================================================================" -ForegroundColor Cyan
 Write-Host "STEP 3: RUN WORKLOAD TO GENERATE PROFILE DATA" -ForegroundColor Cyan
-Write-Host "Please run the compiled binary under realistic workloads to gather profiles." -ForegroundColor Cyan
-Write-Host "Example: Run the bot and play several tracks, search songs, etc." -ForegroundColor Cyan
-Write-Host "The binary is located at: .\target\pgo-gen\serenya.exe" -ForegroundColor Yellow
+Write-Host "Starting the bot in the background to gather profiles..." -ForegroundColor Green
+
+$BotProcess = Start-Process -FilePath ".\target\pgo-gen\serenya.exe" -NoNewWindow -PassThru -RedirectStandardOutput "target\pgo-bot.log" -RedirectStandardError "target\pgo-bot-error.log"
+
+Write-Host "Started bot process (PID: $($BotProcess.Id)). Logs are at target\pgo-bot.log" -ForegroundColor Gray
+Write-Host "Please play several tracks, search songs, etc. on Discord to generate profile data." -ForegroundColor Cyan
 Write-Host "Press enter when you are done running the bot and want to build the optimized binary." -ForegroundColor Cyan
 Write-Host "================================================================================" -ForegroundColor Cyan
-Read-Host "Press Enter to continue..."
+Read-Host "Press Enter to stop the bot and continue..."
+
+Write-Host "Stopping bot process (PID: $($BotProcess.Id))..." -ForegroundColor Green
+Stop-Process -Id $BotProcess.Id -Force -ErrorAction SilentlyContinue
 
 # 4. Locate llvm-profdata tool
 Write-Host "Step 4: Locating llvm-profdata tool..." -ForegroundColor Green
