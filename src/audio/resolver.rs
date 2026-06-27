@@ -360,7 +360,6 @@ async fn perform_parallel_search(
         &[
             SearchProviderKind::YouTubeMusic,
             SearchProviderKind::YouTube,
-            SearchProviderKind::SoundCloud,
         ],
         search_query,
         expected_title,
@@ -412,8 +411,8 @@ async fn collect_search_results(
         .into_iter()
         .take(25)
         .map(|(candidate, score)| Track {
-            title: candidate_display_title(&candidate),
-            url: candidate.url,
+            title: candidate_display_title(&candidate).into(),
+            url: candidate.url.into(),
             duration: candidate.duration,
             requester_id: serenity::UserId::new(user_id),
             requester_name: None,
@@ -622,8 +621,8 @@ pub async fn resolve_input(
             let source_prov: std::sync::Arc<str> = std::sync::Arc::from("Playlist");
             for t in playlist.tracks {
                 tracks.push(Track {
-                    title: t.title,
-                    url: t.url,
+                    title: t.title.into(),
+                    url: t.url.into(),
                     duration: t.duration_secs.map(Duration::from_secs),
                     requester_id: serenity::UserId::new(user_id),
                     requester_name: None,
@@ -1018,8 +1017,8 @@ fn evaluate_confidence_and_respond(
         let mut tracks = Vec::new();
         for (cand, score) in scored.into_iter().take(5) {
             tracks.push(Track {
-                title: candidate_display_title(&cand),
-                url: cand.url,
+                title: candidate_display_title(&cand).into(),
+                url: cand.url.into(),
                 duration: cand.duration,
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
@@ -1063,8 +1062,10 @@ fn evaluate_confidence_and_respond(
             "High confidence match, auto-picking"
         );
         let track = Track {
-            title: forced_title.unwrap_or_else(|| candidate_display_title(top_cand)),
-            url: top_cand.url.clone(),
+            title: forced_title
+                .unwrap_or_else(|| candidate_display_title(top_cand))
+                .into(),
+            url: top_cand.url.clone().into(),
             duration: forced_duration.or(top_cand.duration),
             requester_id: serenity::UserId::new(user_id),
             requester_name: None,
@@ -1250,8 +1251,8 @@ async fn resolve_spotify_embed_fallback(
             let track_url = format!("ytsearch1:{}", search_query);
 
             tracks.push(Track {
-                title: display_title,
-                url: track_url,
+                title: display_title.into(),
+                url: track_url.into(),
                 duration: embed_track.duration.map(Duration::from_millis),
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
@@ -1527,8 +1528,8 @@ async fn resolve_spotify_playlist_api(
             let track_url = format!("ytsearch1:{}", search_query);
 
             tracks.push(Track {
-                title: name.to_owned(),
-                url: track_url,
+                title: name.into(),
+                url: track_url.into(),
                 duration: Some(Duration::from_millis(duration_ms)),
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
@@ -1750,8 +1751,8 @@ async fn resolve_spotify_album_api(
             let track_url = format!("ytsearch1:{}", search_query);
 
             tracks.push(Track {
-                title: name.to_owned(),
-                url: track_url,
+                title: name.into(),
+                url: track_url.into(),
                 duration: Some(Duration::from_millis(duration_ms)),
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
@@ -1949,8 +1950,8 @@ async fn resolve_spotify_artist_top_tracks_api(
         let track_url = format!("ytsearch1:{}", search_query);
 
         tracks.push(Track {
-            title: name.to_owned(),
-            url: track_url,
+            title: name.into(),
+            url: track_url.into(),
             duration: Some(Duration::from_millis(duration_ms)),
             requester_id: serenity::UserId::new(user_id),
             requester_name: None,
@@ -2152,6 +2153,22 @@ async fn resolve_spotify_track(
     spotify_provider.resolve_metadata(&url, http_client).await
 }
 
+fn is_instrumental_or_non_vocal(title: &str) -> bool {
+    let t = title.to_lowercase();
+    t.contains("instrumental")
+        || t.contains("karaoke")
+        || t.contains("off vocal")
+        || t.contains("minus one")
+        || t.contains("backing track")
+        || t.contains("lofi beat")
+        || t.contains("lofi beats")
+        || t.contains("piano cover")
+        || t.contains("orchestra")
+        || t.contains("violin")
+        || t.contains("classical")
+        || t.contains("bgm")
+}
+
 pub async fn resolve_ytsearch_track(
     track: &mut Track,
     http_client: &reqwest::Client,
@@ -2164,10 +2181,28 @@ pub async fn resolve_ytsearch_track(
     let query = raw_query.to_owned();
     tracing::info!(query, "Resolving ytsearch1 query lazily to YouTube URL");
 
-    let scored =
-        perform_parallel_search(&query, &track.title, None, track.duration, http_client).await?;
+    let mut scored = if is_instrumental_or_non_vocal(&track.title) {
+        perform_parallel_search(&query, &track.title, None, track.duration, http_client).await?
+    } else {
+        let query_lyrics = format!("{} lyrics", query);
+        let (normal_res, lyrics_res) = tokio::join!(
+            perform_parallel_search(&query, &track.title, None, track.duration, http_client),
+            perform_parallel_search(&query_lyrics, &track.title, None, track.duration, http_client)
+        );
+        let mut combined = normal_res?;
+        if let Ok(mut l_res) = lyrics_res {
+            combined.append(&mut l_res);
+        }
+        // Deduplicate by URL
+        let mut seen = std::collections::HashSet::new();
+        combined.retain(|(candidate, _)| seen.insert(candidate.url.clone()));
+        // Re-sort by score descending
+        combined.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        combined
+    };
 
-    if let Some((best_candidate, score)) = scored.into_iter().next() {
+    if !scored.is_empty() {
+        let (best_candidate, score) = scored.remove(0);
         let settings = crate::audio::runtime::settings();
         if score >= settings.auto_pick_threshold {
             tracing::info!(
@@ -2176,14 +2211,22 @@ pub async fn resolve_ytsearch_track(
                 score,
                 "Successfully resolved ytsearch1 to real YouTube URL"
             );
-            track.url = best_candidate.url;
-            if track.thumbnail.is_none() {
-                track.thumbnail = best_candidate.thumbnail;
-            }
-            return Ok(());
+        } else {
+            tracing::info!(
+                query,
+                resolved_url = %best_candidate.url,
+                score,
+                "Resolved ytsearch1 fallback candidate using top ranking score"
+            );
         }
+        track.url = best_candidate.url.into();
+        if track.thumbnail.is_none() {
+            track.thumbnail = best_candidate.thumbnail;
+        }
+        return Ok(());
     }
 
+    // Safety fallback: if parallel search results are completely empty (rare)
     let mut candidates = YouTubeProvider.search(&query, http_client).await?;
 
     let best_candidate = if let Some(expected) = track.duration {
@@ -2213,7 +2256,7 @@ pub async fn resolve_ytsearch_track(
             resolved_url = %candidate.url,
             "Resolved ytsearch1 fallback candidate using duration sorting"
         );
-        track.url = candidate.url;
+        track.url = candidate.url.into();
         if track.thumbnail.is_none() {
             track.thumbnail = candidate.thumbnail;
         }
@@ -2250,8 +2293,8 @@ fn recursive_find_tracks(
 
             if !vid.is_empty() && seen_ids.insert(vid.to_string()) {
                 tracks.push(Track {
-                    title: title.to_string(),
-                    url: format!("https://www.youtube.com/watch?v={}", vid),
+                    title: title.into(),
+                    url: format!("https://www.youtube.com/watch?v={}", vid).into(),
                     duration: None,
                     requester_id: serenity::UserId::new(user_id),
                     requester_name: None,
@@ -2287,8 +2330,8 @@ fn recursive_find_tracks(
                 });
 
                 tracks.push(Track {
-                    title: title.to_string(),
-                    url: format!("https://www.youtube.com/watch?v={}", vid),
+                    title: title.into(),
+                    url: format!("https://www.youtube.com/watch?v={}", vid).into(),
                     duration,
                     requester_id: serenity::UserId::new(user_id),
                     requester_name: None,
@@ -2339,9 +2382,16 @@ async fn resolve_youtube_playlist(
 
     let is_album = url.contains("list=OLAK") || url.contains("OLAK5uy_");
 
-    if !is_album
-        && let Ok(mut playlist) = rusty_ytdl::search::Playlist::get(&playlist_url, None).await
-    {
+    if !is_album {
+        let playlist_opts = rusty_ytdl::search::PlaylistSearchOptions {
+            limit: limit as u64,
+            request_options: Some(rusty_ytdl::RequestOptions {
+                client: Some(http_client.clone()),
+                ..Default::default()
+            }),
+            fetch_all: false,
+        };
+        if let Ok(mut playlist) = rusty_ytdl::search::Playlist::get(&playlist_url, Some(&playlist_opts)).await {
         playlist.fetch(Some(limit as u64)).await;
 
         let is_fake_video = playlist.videos.len() == 1
@@ -2367,8 +2417,8 @@ async fn resolve_youtube_playlist(
                 };
 
                 tracks.push(Track {
-                    title: video.title,
-                    url: video.url,
+                    title: video.title.into(),
+                    url: video.url.into(),
                     duration,
                     requester_id: serenity::UserId::new(user_id),
                     requester_name: None,
@@ -2383,6 +2433,7 @@ async fn resolve_youtube_playlist(
             }
         }
     }
+}
 
     // Fallback/Scraper for Album playlists (OLAK...) or failed playlist resolutions
     if !is_valid_playlist {
@@ -2505,13 +2556,19 @@ mod tests {
         recursive_find_tracks(&json_data, &mut tracks, &mut seen_ids, 10, 12345, "YouTube");
 
         assert_eq!(tracks.len(), 2);
-        assert_eq!(tracks[0].title, "Test Lockup Title");
-        assert_eq!(tracks[0].url, "https://www.youtube.com/watch?v=video_id_1");
+        assert_eq!(&*tracks[0].title, "Test Lockup Title");
+        assert_eq!(
+            &*tracks[0].url,
+            "https://www.youtube.com/watch?v=video_id_1"
+        );
         assert_eq!(tracks[0].duration, None);
         assert_eq!(&*tracks[0].source_provider, "YouTube");
 
-        assert_eq!(tracks[1].title, "Test Playlist Title");
-        assert_eq!(tracks[1].url, "https://www.youtube.com/watch?v=video_id_2");
+        assert_eq!(&*tracks[1].title, "Test Playlist Title");
+        assert_eq!(
+            &*tracks[1].url,
+            "https://www.youtube.com/watch?v=video_id_2"
+        );
         assert_eq!(tracks[1].duration, Some(Duration::from_secs(225))); // 3 * 60 + 45 = 225
         assert_eq!(&*tracks[1].source_provider, "YouTube");
     }
@@ -2532,7 +2589,10 @@ mod tests {
             "Unexpected title: {}",
             tracks[0].title
         );
-        assert_eq!(tracks[0].url, "https://www.youtube.com/watch?v=ns878yW7N2c");
+        assert_eq!(
+            &*tracks[0].url,
+            "https://www.youtube.com/watch?v=ns878yW7N2c"
+        );
         assert_eq!(&*tracks[0].source_provider, "YouTube Music");
     }
 

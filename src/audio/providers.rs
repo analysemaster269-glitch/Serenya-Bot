@@ -1100,8 +1100,8 @@ impl YouTubeProvider {
             .await
             .unwrap_or_else(|_| ("YouTube Track".to_owned(), None));
         Ok(vec![Track {
-            title,
-            url: url.to_owned(),
+            title: title.into(),
+            url: url.into(),
             duration: None,
             requester_id: serenity::UserId::new(user_id),
             requester_name: None,
@@ -1697,8 +1697,11 @@ impl SoundCloudProvider {
                     });
 
                     tracks.push(Track {
-                        title: meta.title.unwrap_or_else(|| "SoundCloud Track".to_owned()),
-                        url: track_url,
+                        title: meta
+                            .title
+                            .unwrap_or_else(|| "SoundCloud Track".to_owned())
+                            .into(),
+                        url: track_url.into(),
                         duration,
                         requester_id: serenity::UserId::new(user_id),
                         requester_name: None,
@@ -1718,8 +1721,11 @@ impl SoundCloudProvider {
             let duration = meta.duration.map(Duration::from_millis);
 
             Ok(vec![Track {
-                title: meta.title.unwrap_or_else(|| "SoundCloud Track".to_owned()),
-                url: final_url.to_owned(),
+                title: meta
+                    .title
+                    .unwrap_or_else(|| "SoundCloud Track".to_owned())
+                    .into(),
+                url: final_url.into(),
                 duration,
                 requester_id: serenity::UserId::new(user_id),
                 requester_name: None,
@@ -1742,8 +1748,8 @@ impl DirectUrlProvider {
 
     pub async fn load(&self, input: &str, user_id: u64) -> Result<Vec<Track>, SerenyaError> {
         Ok(vec![Track {
-            title: input.to_owned(),
-            url: input.to_owned(),
+            title: input.into(),
+            url: input.into(),
             duration: None,
             requester_id: serenity::UserId::new(user_id),
             requester_name: None,
